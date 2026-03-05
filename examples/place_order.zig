@@ -1,15 +1,12 @@
-//! Example: Place a limit order on Hyperliquid.
+//! Place a limit order, query its status, then cancel it.
+//!
+//! Demonstrates the core trading loop: place → query → cancel.
+//! Places a BTC limit buy at $1 (will never fill), verifies it's resting,
+//! then cancels by OID.
 //!
 //! Usage:
-//!   PRIVATE_KEY=0x... zig build run-example
-//!
-//! This example demonstrates:
-//! - Creating a signer from a private key
-//! - Building an order request
-//! - Signing and submitting via HTTP
-//!
-//! ⚠️  This will place a REAL order on mainnet if you provide a real key.
-//!      Use testnet or a very low price for safety.
+//!   HL_KEY=<hex> zig build example-place_order
+//!   HL_KEY=<hex> HL_TESTNET=1 zig build example-place_order
 
 const std = @import("std");
 const hlz = @import("hlz");
@@ -18,48 +15,42 @@ const Signer = hlz.crypto.signer.Signer;
 const Decimal = hlz.math.decimal.Decimal;
 const types = hlz.hypercore.types;
 const Client = hlz.hypercore.client.Client;
+const eip712 = hlz.crypto.eip712;
+
+fn fatal(comptime fmt: []const u8, args: anytype) noreturn {
+    std.debug.print(fmt ++ "\n", args);
+    std.process.exit(1);
+}
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.heap.page_allocator;
 
-    // Get private key from environment
-    const key_hex = std.process.getEnvVarOwned(allocator, "PRIVATE_KEY") catch {
-        std.debug.print("Set PRIVATE_KEY env var (hex, with or without 0x prefix)\n", .{});
-        return;
-    };
+    const key_hex = std.process.getEnvVarOwned(allocator, "HL_KEY") catch
+        fatal("Set HL_KEY to your private key (hex, with or without 0x)", .{});
     defer allocator.free(key_hex);
 
-    // Strip 0x prefix if present
     const key = if (std.mem.startsWith(u8, key_hex, "0x")) key_hex[2..] else key_hex;
-    if (key.len != 64) {
-        std.debug.print("Private key must be 32 bytes (64 hex chars)\n", .{});
-        return;
-    }
+    const signer = Signer.fromHex(key) catch fatal("Invalid private key", .{});
 
-    // Create signer
-    const signer = Signer.fromHex(key) catch {
-        std.debug.print("Invalid private key\n", .{});
-        return;
-    };
+    const is_testnet = if (std.process.getEnvVarOwned(allocator, "HL_TESTNET")) |v| blk: {
+        allocator.free(v);
+        break :blk true;
+    } else |_| false;
+    var client = if (is_testnet) Client.testnet(allocator) else Client.mainnet(allocator);
+    defer client.deinit();
 
-    // Print address
-    const hex = "0123456789abcdef";
-    var addr_hex: [42]u8 = undefined;
-    addr_hex[0] = '0';
-    addr_hex[1] = 'x';
-    for (signer.address, 0..) |byte, i| {
-        addr_hex[2 + i * 2] = hex[byte >> 4];
-        addr_hex[2 + i * 2 + 1] = hex[byte & 0x0f];
-    }
-    std.debug.print("Signer address: {s}\n", .{&addr_hex});
+    const addr = eip712.addressToHex(signer.address);
+    std.debug.print("Account: {s}  chain: {s}\n\n", .{
+        &addr,
+        if (is_testnet) "testnet" else "mainnet",
+    });
 
-    // Build a limit buy order: 0.001 BTC at $1 (will not fill, safe for testing)
+    // ── Place ────────────────────────────────────────────────────
+    // Limit buy 0.001 BTC @ $1 GTC — will rest, never fill.
     const order = types.OrderRequest{
-        .asset = 0, // BTC
+        .asset = 0,
         .is_buy = true,
-        .limit_px = Decimal.fromString("1") catch unreachable, // $1 — will never fill
+        .limit_px = Decimal.fromString("1") catch unreachable,
         .sz = Decimal.fromString("0.001") catch unreachable,
         .reduce_only = false,
         .order_type = .{ .limit = .{ .tif = .Gtc } },
@@ -71,39 +62,41 @@ pub fn main() !void {
         .grouping = .na,
     };
 
-    // Use current timestamp as nonce
     const nonce: u64 = @intCast(std.time.milliTimestamp());
+    std.debug.print("Placing limit buy: 0.001 BTC @ $1 (GTC)...\n", .{});
+    var result = try client.place(signer, batch, nonce, null, null);
+    defer result.deinit();
 
-    // Sign the order (zero-alloc, ~50μs)
-    const sig = hlz.hypercore.signing.signOrder(
-        signer,
-        batch,
-        nonce,
-        .mainnet,
-        null,
-        null,
-    ) catch |err| {
-        std.debug.print("Signing failed: {}\n", .{err});
+    std.debug.print("Response: {s}\n\n", .{result.body});
+
+    // ── Parse OID ────────────────────────────────────────────────
+    var json = try result.json();
+    const statuses = ((json.object.get("response") orelse return).object.get("data") orelse return).object.get("statuses") orelse return;
+
+    if (statuses.array.items.len == 0) return;
+    const first = statuses.array.items[0];
+    const resting = first.object.get("resting") orelse {
+        std.debug.print("Order did not rest: {s}\n", .{result.body});
         return;
     };
+    const oid = resting.object.get("oid").?.integer;
+    std.debug.print("Order resting — OID: {d}\n", .{oid});
 
-    const sig_bytes = sig.toEthBytes();
-    var sig_hex: [132]u8 = undefined;
-    sig_hex[0] = '0';
-    sig_hex[1] = 'x';
-    for (sig_bytes, 0..) |byte, i| {
-        sig_hex[2 + i * 2] = hex[byte >> 4];
-        sig_hex[2 + i * 2 + 1] = hex[byte & 0x0f];
-    }
-    std.debug.print("Signature: {s}\n", .{&sig_hex});
-    std.debug.print("Nonce: {d}\n", .{nonce});
+    // ── Query ────────────────────────────────────────────────────
+    var status = try client.orderStatus(&addr, @intCast(oid));
+    defer status.deinit();
+    std.debug.print("Order status: {s}\n\n", .{status.body});
 
-    // Submit via HTTP (uncomment to actually send)
-    // var client = Client.mainnet(allocator);
-    // defer client.deinit();
-    // var result = try client.place(signer, batch, nonce, null, null);
-    // defer result.deinit();
-    // std.debug.print("Response: {s}\n", .{result.body});
-
-    std.debug.print("\nOrder signed successfully! Uncomment HTTP section to submit.\n", .{});
+    // ── Cancel ───────────────────────────────────────────────────
+    const cancel = types.BatchCancel{
+        .cancels = &[_]types.Cancel{.{
+            .asset = 0,
+            .oid = @intCast(oid),
+        }},
+    };
+    const cancel_nonce: u64 = @intCast(std.time.milliTimestamp());
+    std.debug.print("Cancelling OID {d}...\n", .{oid});
+    var cancel_result = try client.cancel(signer, cancel, cancel_nonce, null, null);
+    defer cancel_result.deinit();
+    std.debug.print("Cancel response: {s}\n", .{cancel_result.body});
 }

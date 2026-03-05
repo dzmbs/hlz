@@ -246,6 +246,18 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(fuzz_tests).step);
 
+    const eip712_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/eip712_vectors.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "hlz", .module = hlz },
+            },
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(eip712_tests).step);
+
     // ── Benchmarks ───────────────────────────────────────────────────
     const bench_step = b.step("bench", "Run benchmarks");
     const bench = b.addExecutable(.{
@@ -279,19 +291,29 @@ pub fn build(b: *std.Build) void {
     e2e_step.dependOn(&run_e2e.step);
 
     // ── Examples ─────────────────────────────────────────────────────
-    const example_step = b.step("example", "Run place_order example");
-    const example = b.addExecutable(.{
-        .name = "place_order",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("examples/place_order.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "hlz", .module = hlz },
-            },
-        }),
-    });
-    example_step.dependOn(&b.addRunArtifact(example).step);
+    const examples = [_]struct { name: []const u8, desc: []const u8 }{
+        .{ .name = "place_order", .desc = "Place, query, and cancel a limit order" },
+        .{ .name = "market_data", .desc = "Fetch live market data (no key needed)" },
+        .{ .name = "transfer", .desc = "Send USDC to an address" },
+        .{ .name = "websocket", .desc = "Subscribe to real-time WebSocket data" },
+        .{ .name = "sub_account", .desc = "List and create sub-accounts" },
+    };
+    inline for (examples) |ex| {
+        const step = b.step("example-" ++ ex.name, ex.desc);
+        const exe = b.addExecutable(.{
+            .name = ex.name,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("examples/" ++ ex.name ++ ".zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "hlz", .module = hlz },
+                },
+            }),
+        });
+        step.dependOn(&b.addRunArtifact(exe).step);
+    }
+
 
     // ── TUI demo ─────────────────────────────────────────────────────
     const tui_demo_step = b.step("tui-demo", "Run TUI demo");
