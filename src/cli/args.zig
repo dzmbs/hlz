@@ -44,8 +44,65 @@ pub const Command = union(enum) {
     subaccount: SubAccountArgs,
     account: AccountArgs,
     config: void,
-    help: void,
+    help: HelpArgs,
     version: void,
+};
+
+pub const HelpTopic = enum {
+    keys,
+    mids,
+    positions,
+    orders,
+    fills,
+    balance,
+    perps,
+    spot,
+    dexes,
+    buy,
+    sell,
+    cancel,
+    modify,
+    send,
+    stream,
+    status,
+    funding,
+    book,
+    markets,
+    trade,
+    leverage,
+    price,
+    portfolio,
+    referral,
+    twap,
+    batch,
+    approve_agent,
+    withdraw,
+    transfer,
+    fees,
+    rate_limit,
+    stake,
+    vault,
+    ledger,
+    approve_builder,
+    subaccount,
+    account,
+    config,
+    help,
+    version,
+
+    pub fn commandName(self: HelpTopic) []const u8 {
+        return switch (self) {
+            .approve_agent => "approve-agent",
+            .rate_limit => "rate-limit",
+            .approve_builder => "approve-builder",
+            else => @tagName(self),
+        };
+    }
+};
+
+pub const HelpArgs = struct {
+    topic: ?HelpTopic = null,
+    invalid_topic: ?[]const u8 = null,
 };
 
 pub const MidsArgs = struct {
@@ -350,10 +407,16 @@ pub fn parse(allocator: std.mem.Allocator) ParseError!ParseResult {
         }
     }
 
-    if (pos_count == 0) return .{ .command = .{ .help = {} }, .flags = flags };
+    if (pos_count == 0) return .{ .command = .{ .help = .{} }, .flags = flags };
 
     const cmd_str = positionals[0];
     const rest = positionals[1..pos_count];
+
+    if (canonicalHelpTopic(cmd_str)) |topic| {
+        if (topic != .help and hasHelpFlag(rest)) {
+            return .{ .command = .{ .help = .{ .topic = topic } }, .flags = flags };
+        }
+    }
 
     const command: Command = if (std.mem.eql(u8, cmd_str, "keys") or std.mem.eql(u8, cmd_str, "key"))
         .{ .keys = parseKeys(rest) }
@@ -384,17 +447,17 @@ pub fn parse(allocator: std.mem.Allocator) ParseError!ParseResult {
     else if (std.mem.eql(u8, cmd_str, "send"))
         .{ .send = parseSend(rest) orelse return error.MissingArgument }
     else if (std.mem.eql(u8, cmd_str, "stream") or std.mem.eql(u8, cmd_str, "sub"))
-        if (hasHelpFlag(rest)) .{ .help = {} } else .{ .stream = parseStream(rest) }
+        .{ .stream = parseStream(rest) }
     else if (std.mem.eql(u8, cmd_str, "status"))
         .{ .status = .{ .oid = if (rest.len > 0) rest[0] else return error.MissingArgument } }
     else if (std.mem.eql(u8, cmd_str, "funding") or std.mem.eql(u8, cmd_str, "fund"))
         .{ .funding = parseFunding(rest) }
     else if (std.mem.eql(u8, cmd_str, "markets") or std.mem.eql(u8, cmd_str, "m"))
-        if (hasHelpFlag(rest)) .{ .help = {} } else .{ .markets = {} }
+        .{ .markets = {} }
     else if (std.mem.eql(u8, cmd_str, "book") or std.mem.eql(u8, cmd_str, "ob"))
-        if (hasHelpFlag(rest)) .{ .help = {} } else .{ .book = parseBook(rest) orelse return error.MissingArgument }
+        .{ .book = parseBook(rest) orelse return error.MissingArgument }
     else if (std.mem.eql(u8, cmd_str, "trade") or std.mem.eql(u8, cmd_str, "t"))
-        if (hasHelpFlag(rest)) .{ .help = {} } else .{ .trade = parseTrade(rest) }
+        .{ .trade = parseTrade(rest) }
     else if (std.mem.eql(u8, cmd_str, "leverage") or std.mem.eql(u8, cmd_str, "lev"))
         .{ .leverage = parseLeverage(rest) orelse return error.MissingArgument }
     else if (std.mem.eql(u8, cmd_str, "price"))
@@ -425,14 +488,14 @@ pub fn parse(allocator: std.mem.Allocator) ParseError!ParseResult {
         .{ .ledger = parseLedger(rest) }
     else if (std.mem.eql(u8, cmd_str, "approve-builder"))
         .{ .approve_builder = parseApproveBuilder(rest) orelse return error.MissingArgument }
-    else if (std.mem.eql(u8, cmd_str, "subaccount") or std.mem.eql(u8, cmd_str, "sub"))
+    else if (std.mem.eql(u8, cmd_str, "subaccount"))
         .{ .subaccount = parseSubAccount(rest) }
     else if (std.mem.eql(u8, cmd_str, "account"))
         .{ .account = parseAccount(rest) }
     else if (std.mem.eql(u8, cmd_str, "config"))
         .{ .config = {} }
     else if (std.mem.eql(u8, cmd_str, "help") or std.mem.eql(u8, cmd_str, "--help") or std.mem.eql(u8, cmd_str, "-h"))
-        .{ .help = {} }
+        .{ .help = parseHelp(rest) }
     else if (std.mem.eql(u8, cmd_str, "version") or std.mem.eql(u8, cmd_str, "--version") or std.mem.eql(u8, cmd_str, "-V"))
         .{ .version = {} }
     else
@@ -604,6 +667,65 @@ fn hasHelpFlag(args: []const []const u8) bool {
         if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) return true;
     }
     return false;
+}
+
+fn canonicalHelpTopic(name: []const u8) ?HelpTopic {
+    if (std.mem.eql(u8, name, "keys") or std.mem.eql(u8, name, "key")) return .keys;
+    if (std.mem.eql(u8, name, "mids") or std.mem.eql(u8, name, "mid")) return .mids;
+    if (std.mem.eql(u8, name, "positions") or std.mem.eql(u8, name, "pos")) return .positions;
+    if (std.mem.eql(u8, name, "orders") or std.mem.eql(u8, name, "ord")) return .orders;
+    if (std.mem.eql(u8, name, "fills")) return .fills;
+    if (std.mem.eql(u8, name, "balance") or std.mem.eql(u8, name, "bal")) return .balance;
+    if (std.mem.eql(u8, name, "perps")) return .perps;
+    if (std.mem.eql(u8, name, "spot")) return .spot;
+    if (std.mem.eql(u8, name, "dexes") or std.mem.eql(u8, name, "dex")) return .dexes;
+    if (std.mem.eql(u8, name, "buy") or std.mem.eql(u8, name, "long")) return .buy;
+    if (std.mem.eql(u8, name, "sell") or std.mem.eql(u8, name, "short")) return .sell;
+    if (std.mem.eql(u8, name, "cancel")) return .cancel;
+    if (std.mem.eql(u8, name, "modify") or std.mem.eql(u8, name, "mod")) return .modify;
+    if (std.mem.eql(u8, name, "send")) return .send;
+    if (std.mem.eql(u8, name, "stream") or std.mem.eql(u8, name, "sub")) return .stream;
+    if (std.mem.eql(u8, name, "status")) return .status;
+    if (std.mem.eql(u8, name, "funding") or std.mem.eql(u8, name, "fund")) return .funding;
+    if (std.mem.eql(u8, name, "book") or std.mem.eql(u8, name, "ob")) return .book;
+    if (std.mem.eql(u8, name, "markets") or std.mem.eql(u8, name, "m")) return .markets;
+    if (std.mem.eql(u8, name, "trade") or std.mem.eql(u8, name, "t")) return .trade;
+    if (std.mem.eql(u8, name, "leverage") or std.mem.eql(u8, name, "lev")) return .leverage;
+    if (std.mem.eql(u8, name, "price")) return .price;
+    if (std.mem.eql(u8, name, "portfolio") or std.mem.eql(u8, name, "folio")) return .portfolio;
+    if (std.mem.eql(u8, name, "referral")) return .referral;
+    if (std.mem.eql(u8, name, "twap")) return .twap;
+    if (std.mem.eql(u8, name, "batch")) return .batch;
+    if (std.mem.eql(u8, name, "approve-agent") or std.mem.eql(u8, name, "approve")) return .approve_agent;
+    if (std.mem.eql(u8, name, "withdraw")) return .withdraw;
+    if (std.mem.eql(u8, name, "transfer")) return .transfer;
+    if (std.mem.eql(u8, name, "fees") or std.mem.eql(u8, name, "fee")) return .fees;
+    if (std.mem.eql(u8, name, "rate-limit") or std.mem.eql(u8, name, "ratelimit")) return .rate_limit;
+    if (std.mem.eql(u8, name, "stake") or std.mem.eql(u8, name, "staking")) return .stake;
+    if (std.mem.eql(u8, name, "vault")) return .vault;
+    if (std.mem.eql(u8, name, "ledger")) return .ledger;
+    if (std.mem.eql(u8, name, "approve-builder")) return .approve_builder;
+    if (std.mem.eql(u8, name, "subaccount")) return .subaccount;
+    if (std.mem.eql(u8, name, "account")) return .account;
+    if (std.mem.eql(u8, name, "config")) return .config;
+    if (std.mem.eql(u8, name, "help") or std.mem.eql(u8, name, "--help") or std.mem.eql(u8, name, "-h")) return .help;
+    if (std.mem.eql(u8, name, "version") or std.mem.eql(u8, name, "--version") or std.mem.eql(u8, name, "-V")) return .version;
+    return null;
+}
+
+fn parseHelp(args: []const []const u8) HelpArgs {
+    var result = HelpArgs{};
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) continue;
+        if (std.mem.startsWith(u8, arg, "--")) continue;
+        if (canonicalHelpTopic(arg)) |topic| {
+            result.topic = topic;
+        } else {
+            result.invalid_topic = arg;
+        }
+        break;
+    }
+    return result;
 }
 
 fn parsePrice(args: []const []const u8) ?PriceArgs {

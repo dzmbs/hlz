@@ -51,7 +51,7 @@ pub fn main() !void {
     w.quiet = flags.quiet;
 
     const cmd = result.command orelse {
-        try printHelp(&w);
+        try printHelp(&w, .{});
         return;
     };
 
@@ -67,7 +67,13 @@ pub fn main() !void {
     }
 
     switch (cmd) {
-        .help => try printHelp(&w),
+        .help => |a| {
+            if (a.invalid_topic) |bad| {
+                try w.failFmt("unknown command '{s}'. Run `hlz help` for usage.", .{bad});
+                std.process.exit(EXIT_USAGE);
+            }
+            try printHelp(&w, a);
+        },
         .version => try printVersion(&w),
         .config => try commands.showConfig(&w, config),
         .keys => |a| commands.keys(allocator, &w, a) catch |e| return exit(&w, "keys", e),
@@ -223,7 +229,15 @@ fn printVersion(w: *output_mod.Writer) !void {
     }
 }
 
-fn printHelp(w: *output_mod.Writer) !void {
+fn printHelp(w: *output_mod.Writer, help: args_mod.HelpArgs) !void {
+    if (help.topic) |topic| {
+        try printCommandHelp(w, topic);
+        return;
+    }
+    try printGlobalHelp(w);
+}
+
+fn printGlobalHelp(w: *output_mod.Writer) !void {
     try w.styled(Style.bold_cyan,
         \\
         \\  ╦ ╦╦  
@@ -233,7 +247,8 @@ fn printHelp(w: *output_mod.Writer) !void {
     );
     try w.print("  Hyperliquid CLI v{s}\n\n", .{VERSION});
     try w.styled(Style.bold_white, "USAGE\n");
-    try w.print("  hlz <command> [args] [flags]\n\n", .{});
+    try w.print("  hlz <command> [args] [flags]\n", .{});
+    try w.print("  hlz help <command>\n\n", .{});
 
     try w.styled(Style.bold_white, "MARKET DATA\n");
     try w.print(
@@ -419,4 +434,525 @@ fn printHelp(w: *output_mod.Writer) !void {
 
     try w.styled(Style.muted, "  Asset syntax: BTC (perp) · PURR/USDC (spot) · xyz:BTC (HIP-3 DEX)\n");
     try w.styled(Style.muted, "  Aliases: long=buy short=sell pos=positions bal=balance ord=orders\n\n");
+}
+
+fn printHelpSection(w: *output_mod.Writer, title: []const u8, body: []const u8) !void {
+    try w.styled(Style.bold_white, title);
+    try w.print("{s}", .{body});
+}
+
+fn printCommandDoc(
+    w: *output_mod.Writer,
+    name: []const u8,
+    summary: []const u8,
+    usage: []const u8,
+    aliases: ?[]const u8,
+    details: ?[]const u8,
+    examples: ?[]const u8,
+) !void {
+    try w.styled(Style.bold_white, "COMMAND\n");
+    try w.print("  {s}\n", .{name});
+    try w.print("  {s}\n\n", .{summary});
+    try printHelpSection(w, "USAGE\n", usage);
+    if (aliases) |body| try printHelpSection(w, "ALIASES\n", body);
+    if (details) |body| try printHelpSection(w, "DETAILS\n", body);
+    if (examples) |body| try printHelpSection(w, "EXAMPLES\n", body);
+    try w.styled(Style.muted, "  Global flags: --json --quiet --chain --key --key-name --address\n");
+}
+
+fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
+    switch (topic) {
+        .keys => try printCommandDoc(w, "keys", "Manage encrypted local keystore entries.", 
+            \\  hlz keys ls
+            \\  hlz keys new <NAME>
+            \\  hlz keys import <NAME> --private-key <HEX>
+            \\  hlz keys export <NAME>
+            \\  hlz keys default <NAME>
+            \\  hlz keys rm <NAME>
+            \\
+        , "  key\n\n",
+            \\  `keys new` and `keys import` store encrypted keys locally.
+            \\  `keys export` and `keys rm` operate on an existing named key.
+            \\  Use HL_PASSWORD or --password when the keystore command requires decryption.
+            \\
+        ,
+            \\  hlz keys ls
+            \\  hlz keys import market-maker --private-key 0xabc...
+            \\
+        ),
+        .mids => try printCommandDoc(w, "mids", "Show all mid prices or a single asset.", 
+            \\  hlz mids [COIN] [--dex <DEX>] [--all] [--page <N>]
+            \\
+        , "  mid\n\n",
+            \\  With no COIN, hlz prints a paginated market-wide view.
+            \\  Use --dex for HIP-3 markets and --all to disable pagination.
+            \\
+        ,
+            \\  hlz mids
+            \\  hlz mids BTC
+            \\
+        ),
+        .positions => try printCommandDoc(w, "positions", "Show open perp positions for an address.", 
+            \\  hlz positions [ADDR] [--dex <DEX>] [--all-dexes]
+            \\
+        , "  pos\n\n",
+            \\  If ADDR is omitted, hlz uses --address or HL_ADDRESS when available.
+            \\  This is a read command and does not require a signing key.
+            \\
+        ,
+            \\  hlz positions 0xabc...
+            \\  hlz pos --json
+            \\
+        ),
+        .orders => try printCommandDoc(w, "orders", "Show open orders for an address.", 
+            \\  hlz orders [ADDR] [--dex <DEX>] [--all-dexes]
+            \\
+        , "  ord\n\n",
+            \\  If ADDR is omitted, hlz uses --address or HL_ADDRESS when available.
+            \\  This is a read command and does not require a signing key.
+            \\
+        ,
+            \\  hlz orders 0xabc...
+            \\  hlz ord --json
+            \\
+        ),
+        .fills => try printCommandDoc(w, "fills", "Show recent fills for an address.", 
+            \\  hlz fills [ADDR] [--from <TIME>] [--to <TIME>]
+            \\
+        , null,
+            \\  Time filters are forwarded as strings; use the format expected by your workflow.
+            \\  If ADDR is omitted, hlz uses --address or HL_ADDRESS when available.
+            \\
+        ,
+            \\  hlz fills
+            \\  hlz fills 0xabc... --from 1710000000000
+            \\
+        ),
+        .balance => try printCommandDoc(w, "balance", "Show account balance, equity, and health.", 
+            \\  hlz balance [ADDR] [--dex <DEX>] [--all-dexes]
+            \\
+        , "  bal\n\n",
+            \\  If ADDR is omitted, hlz uses --address or HL_ADDRESS when available.
+            \\  This is a read command and does not require a signing key.
+            \\
+        ,
+            \\  hlz balance
+            \\  hlz bal 0xabc...
+            \\
+        ),
+        .perps => try printCommandDoc(w, "perps", "List perpetual markets.", 
+            \\  hlz perps [FILTER] [--dex <DEX>] [--all] [--page <N>] [--filter <TEXT>]
+            \\
+        , null,
+            \\  A bare FILTER positional is treated the same as --filter.
+            \\  Use --all to disable pagination.
+            \\
+        ,
+            \\  hlz perps
+            \\  hlz perps BTC
+            \\
+        ),
+        .spot => try printCommandDoc(w, "spot", "List spot markets.", 
+            \\  hlz spot [FILTER] [--all] [--page <N>] [--filter <TEXT>]
+            \\
+        , null,
+            \\  A bare FILTER positional is treated the same as --filter.
+            \\  Use --all to disable pagination.
+            \\
+        ,
+            \\  hlz spot
+            \\  hlz spot PURR
+            \\
+        ),
+        .dexes => try printCommandDoc(w, "dexes", "List available HIP-3 DEX venues.", 
+            \\  hlz dexes
+            \\
+        , "  dex\n\n", null,
+            \\  hlz dexes
+            \\
+        ),
+        .buy => try printCommandDoc(w, "buy", "Place a buy order.", 
+            \\  hlz buy <COIN> <SZ> [@PX]
+            \\  hlz buy <COIN> <SZ> --slippage <PCT>
+            \\
+        , "  long\n\n",
+            \\  Limit orders use @PX or a bare trailing price. Omit price for market-style execution.
+            \\  Flags: --reduce-only --tif <gtc|ioc|alo> --tp <PX> --sl <PX>
+            \\  Also supports --trigger-above, --trigger-below, and --dry-run.
+            \\  Requires a signing key via --key-name/HL_PASSWORD, --key, or HL_KEY.
+            \\
+        ,
+            \\  hlz buy BTC 0.1 @95000
+            \\  hlz long ETH 1 --slippage 0.5 --dry-run
+            \\
+        ),
+        .sell => try printCommandDoc(w, "sell", "Place a sell order.", 
+            \\  hlz sell <COIN> <SZ> [@PX]
+            \\  hlz sell <COIN> <SZ> --slippage <PCT>
+            \\
+        , "  short\n\n",
+            \\  Limit orders use @PX or a bare trailing price. Omit price for market-style execution.
+            \\  Flags: --reduce-only --tif <gtc|ioc|alo> --tp <PX> --sl <PX>
+            \\  Also supports --trigger-above, --trigger-below, and --dry-run.
+            \\  Requires a signing key via --key-name/HL_PASSWORD, --key, or HL_KEY.
+            \\
+        ,
+            \\  hlz sell BTC 0.1 @98000
+            \\  hlz short ETH 1 --slippage 0.5 --dry-run
+            \\
+        ),
+        .cancel => try printCommandDoc(w, "cancel", "Cancel one order, a market, or all orders.", 
+            \\  hlz cancel <COIN> [OID]
+            \\  hlz cancel <COIN> --cloid <CLOID>
+            \\  hlz cancel --all
+            \\
+        , null,
+            \\  A numeric positional after COIN is treated as an order id.
+            \\  Requires a signing key via --key-name/HL_PASSWORD, --key, or HL_KEY.
+            \\
+        ,
+            \\  hlz cancel ETH
+            \\  hlz cancel BTC 123456789
+            \\
+        ),
+        .modify => try printCommandDoc(w, "modify", "Modify an existing order in place.", 
+            \\  hlz modify <COIN> <OID> <SZ> <PX>
+            \\
+        , "  mod\n\n",
+            \\  Price can be passed as `@3400` or `3400`.
+            \\  Requires a signing key via --key-name/HL_PASSWORD, --key, or HL_KEY.
+            \\
+        ,
+            \\  hlz modify ETH 123456789 1.5 @3400
+            \\
+        ),
+        .send => try printCommandDoc(w, "send", "Send a token to another address or move assets internally.", 
+            \\  hlz send <AMT> [TOKEN] <DEST>
+            \\  hlz send <AMT> [TOKEN] --from <perp|spot> --to <DEST|perp|spot>
+            \\  hlz send <AMT> [TOKEN] --subaccount <ADDR> --to <DEST>
+            \\
+        , null,
+            \\  TOKEN defaults to USDC. If DEST is omitted, hlz performs a self-transfer.
+            \\  Use --from and --to for perp/spot moves or DEX destinations.
+            \\  Requires a signing key via --key-name/HL_PASSWORD, --key, or HL_KEY.
+            \\
+        ,
+            \\  hlz send 100 USDC 0xabc...
+            \\  hlz send 100 USDC --to spot
+            \\
+        ),
+        .stream => try printCommandDoc(w, "stream", "Subscribe to a live WebSocket feed.", 
+            \\  hlz stream [trades|bbo|book|candles|mids|fills|orders] <COIN|ADDR> [--interval <INT>] [--filter <TEXT>]
+            \\
+        , "  sub\n\n",
+            \\  If the first positional is not a stream kind, hlz treats it as the coin and defaults to trades.
+            \\  Address targets apply to fills and orders streams.
+            \\
+        ,
+            \\  hlz stream trades BTC
+            \\  hlz sub candles ETH --interval 5m
+            \\
+        ),
+        .status => try printCommandDoc(w, "status", "Fetch order status by order id.", 
+            \\  hlz status <OID>
+            \\
+        , null,
+            \\  This is a read command and does not require a signing key.
+            \\
+        ,
+            \\  hlz status 123456789
+            \\
+        ),
+        .funding => try printCommandDoc(w, "funding", "Show funding rates with optional pagination and filtering.", 
+            \\  hlz funding [FILTER] [--top <N>] [--all] [--page <N>] [--filter <TEXT>]
+            \\
+        , "  fund\n\n",
+            \\  A bare FILTER positional is treated the same as --filter.
+            \\  Use --all to disable pagination.
+            \\
+        ,
+            \\  hlz funding
+            \\  hlz fund BTC
+            \\
+        ),
+        .book => try printCommandDoc(w, "book", "Show the L2 order book for one market.", 
+            \\  hlz book <COIN> [--depth <N>] [--live]
+            \\
+        , "  ob\n\n",
+            \\  --live keeps the book open and refreshes in place.
+            \\  Depth defaults to 15.
+            \\
+        ,
+            \\  hlz book BTC
+            \\  hlz ob ETH --depth 25 --live
+            \\
+        ),
+        .markets => try printCommandDoc(w, "markets", "Open the interactive market browser.", 
+            \\  hlz markets
+            \\
+        , "  m\n\n",
+            \\  This launches the TUI market browser.
+            \\
+        ,
+            \\  hlz markets
+            \\
+        ),
+        .trade => try printCommandDoc(w, "trade", "Open the trading terminal TUI.", 
+            \\  hlz trade [COIN]
+            \\
+        , "  t\n\n",
+            \\  COIN defaults to BTC.
+            \\  Trading actions inside the terminal still require a signing key.
+            \\
+        ,
+            \\  hlz trade
+            \\  hlz t ETH
+            \\
+        ),
+        .leverage => try printCommandDoc(w, "leverage", "Query or set leverage for a perp market.", 
+            \\  hlz leverage <COIN> [N] [--cross|--isolated]
+            \\
+        , "  lev\n\n",
+            \\  Omit N to query the current leverage.
+            \\  Passing N changes leverage and requires a signing key.
+            \\
+        ,
+            \\  hlz leverage BTC
+            \\  hlz lev ETH 5 --isolated
+            \\
+        ),
+        .price => try printCommandDoc(w, "price", "Show mid price plus bid/ask spread.", 
+            \\  hlz price <COIN> [--dex <DEX>] [--quote <TOKEN>] [--all]
+            \\
+        , null,
+            \\  Use --dex for HIP-3 venues and --quote when a market supports multiple quote tokens.
+            \\
+        ,
+            \\  hlz price BTC
+            \\  hlz price xyz:BTC --dex xyz
+            \\
+        ),
+        .portfolio => try printCommandDoc(w, "portfolio", "Show positions plus spot balances for an address.", 
+            \\  hlz portfolio [ADDR] [--dex <DEX>] [--all-dexes]
+            \\
+        , "  folio\n\n",
+            \\  If ADDR is omitted, hlz uses --address or HL_ADDRESS when available.
+            \\  This is a read command and does not require a signing key.
+            \\
+        ,
+            \\  hlz portfolio
+            \\  hlz folio 0xabc...
+            \\
+        ),
+        .referral => try printCommandDoc(w, "referral", "Show referral status or set a referral code.", 
+            \\  hlz referral
+            \\  hlz referral status
+            \\  hlz referral set <CODE>
+            \\  hlz referral <CODE>
+            \\
+        , null,
+            \\  Setting a referral code is a write action and requires a signing key.
+            \\  Querying status is read-only.
+            \\
+        ,
+            \\  hlz referral
+            \\  hlz referral set MYCODE
+            \\
+        ),
+        .twap => try printCommandDoc(w, "twap", "Slice an order over time.", 
+            \\  hlz twap <COIN> <buy|sell> <SZ> [--duration <SPAN>] [--slices <N>] [--slippage <PCT>]
+            \\
+        , null,
+            \\  Duration defaults to 1h, slices default to 10, slippage defaults to 1.0 percent.
+            \\  Requires a signing key via --key-name/HL_PASSWORD, --key, or HL_KEY.
+            \\
+        ,
+            \\  hlz twap BTC buy 1 --duration 30m --slices 6
+            \\
+        ),
+        .batch => try printCommandDoc(w, "batch", "Submit multiple order instructions at once.", 
+            \\  hlz batch "buy BTC 0.1 @98000" "sell ETH 1.0"
+            \\  echo '["buy BTC 0.1 @98000"]' | hlz batch --stdin
+            \\
+        , null,
+            \\  Batch accepts up to 16 orders from argv or stdin.
+            \\  Requires a signing key via --key-name/HL_PASSWORD, --key, or HL_KEY.
+            \\
+        ,
+            \\  hlz batch "buy BTC 0.1 @98000" "sell ETH 1.0"
+            \\
+        ),
+        .approve_agent => try printCommandDoc(w, "approve-agent", "Approve an API wallet for your account.", 
+            \\  hlz approve-agent <ADDR> [--name <LABEL>]
+            \\
+        , "  approve\n\n",
+            \\  This is a write action and requires a signing key for the main account.
+            \\
+        ,
+            \\  hlz approve-agent 0xabc... --name bot-1
+            \\
+        ),
+        .withdraw => try printCommandDoc(w, "withdraw", "Bridge-withdraw funds to an address.", 
+            \\  hlz withdraw <AMT> [DEST]
+            \\
+        , null,
+            \\  If DEST is omitted, the destination defaults to self.
+            \\  This is a write action and requires a signing key.
+            \\
+        ,
+            \\  hlz withdraw 100
+            \\  hlz withdraw 100 0xabc...
+            \\
+        ),
+        .transfer => try printCommandDoc(w, "transfer", "Move USDC between perp and spot wallets.", 
+            \\  hlz transfer <AMT> --to-spot
+            \\  hlz transfer <AMT> --to-perp
+            \\
+        , null,
+            \\  One direction flag is required to prevent accidental transfers.
+            \\  This is a write action and requires a signing key.
+            \\
+        ,
+            \\  hlz transfer 250 --to-spot
+            \\  hlz transfer 250 --to-perp
+            \\
+        ),
+        .fees => try printCommandDoc(w, "fees", "Show fee tiers and fee rates for an address.", 
+            \\  hlz fees [ADDR]
+            \\
+        , "  fee\n\n",
+            \\  If ADDR is omitted, hlz uses --address or HL_ADDRESS when available.
+            \\  This is a read command and does not require a signing key.
+            \\
+        ,
+            \\  hlz fees
+            \\  hlz fee 0xabc...
+            \\
+        ),
+        .rate_limit => try printCommandDoc(w, "rate-limit", "Show account rate-limit status.", 
+            \\  hlz rate-limit [ADDR]
+            \\
+        , "  ratelimit\n\n",
+            \\  If ADDR is omitted, hlz uses --address or HL_ADDRESS when available.
+            \\  This is a read command and does not require a signing key.
+            \\
+        ,
+            \\  hlz rate-limit
+            \\
+        ),
+        .stake => try printCommandDoc(w, "stake", "Inspect or manage staking delegation.", 
+            \\  hlz stake status
+            \\  hlz stake rewards
+            \\  hlz stake history
+            \\  hlz stake delegate <VALIDATOR> <WEI>
+            \\  hlz stake undelegate <VALIDATOR> <WEI>
+            \\
+        , "  staking\n\n",
+            \\  Delegate and undelegate are write actions and require a signing key.
+            \\  Status, rewards, and history are read-only.
+            \\
+        ,
+            \\  hlz stake status
+            \\  hlz staking delegate 0xvalidator 1000000000000000000
+            \\
+        ),
+        .vault => try printCommandDoc(w, "vault", "Inspect a vault or move funds in and out.", 
+            \\  hlz vault <ADDR>
+            \\  hlz vault info <ADDR>
+            \\  hlz vault deposit <ADDR> <AMT>
+            \\  hlz vault withdraw <ADDR> <AMT>
+            \\
+        , null,
+            \\  `vault` and `vault info` are read-only.
+            \\  Deposit and withdraw are write actions and require a signing key.
+            \\
+        ,
+            \\  hlz vault 0xvault...
+            \\  hlz vault deposit 0xvault... 100
+            \\
+        ),
+        .ledger => try printCommandDoc(w, "ledger", "Show non-funding ledger updates.", 
+            \\  hlz ledger [ADDR] [--from <TIME>] [--to <TIME>]
+            \\
+        , null,
+            \\  If ADDR is omitted, hlz uses --address or HL_ADDRESS when available.
+            \\  This is a read command and does not require a signing key.
+            \\
+        ,
+            \\  hlz ledger
+            \\  hlz ledger 0xabc... --from 1710000000000
+            \\
+        ),
+        .approve_builder => try printCommandDoc(w, "approve-builder", "Approve a builder fee rate.", 
+            \\  hlz approve-builder <ADDR> <RATE>
+            \\
+        , null,
+            \\  This is a write action and requires a signing key.
+            \\  RATE is the max fee rate you are approving.
+            \\
+        ,
+            \\  hlz approve-builder 0xbuilder... "0.001%"
+            \\
+        ),
+        .subaccount => try printCommandDoc(w, "subaccount", "Manage sub-accounts and sub-account transfers.", 
+            \\  hlz subaccount ls
+            \\  hlz subaccount create <NAME>
+            \\  hlz subaccount transfer <ADDR> <AMT> [--withdraw]
+            \\  hlz subaccount transfer <ADDR> <AMT> --token <TOKEN> [--withdraw]
+            \\
+        , null,
+            \\  `ls` is read-only. `create` and transfer actions require a signing key.
+            \\  `--withdraw` flips transfer direction from deposit to withdraw.
+            \\  Adding --token turns a USDC transfer into a spot token transfer.
+            \\
+        ,
+            \\  hlz subaccount ls
+            \\  hlz subaccount create market-maker-1
+            \\
+        ),
+        .account => try printCommandDoc(w, "account", "Query or set account abstraction mode.", 
+            \\  hlz account
+            \\  hlz account standard
+            \\  hlz account unified
+            \\  hlz account portfolio
+            \\
+        , null,
+            \\  With no mode, hlz shows help or queries the current mode when an address is available.
+            \\  Setting a mode is a write action and requires a signing key.
+            \\
+        ,
+            \\  hlz account
+            \\  hlz account unified
+            \\
+        ),
+        .config => try printCommandDoc(w, "config", "Show the resolved runtime configuration.", 
+            \\  hlz config
+            \\
+        , null,
+            \\  Prints the effective chain, output mode, address, and key source information.
+            \\
+        ,
+            \\  hlz config
+            \\
+        ),
+        .help => try printCommandDoc(w, "help", "Show global help or help for one command.", 
+            \\  hlz help
+            \\  hlz help <COMMAND>
+            \\
+        , null,
+            \\  Every top-level command also supports `--help` and `-h`.
+            \\
+        ,
+            \\  hlz help transfer
+            \\  hlz buy --help
+            \\
+        ),
+        .version => try printCommandDoc(w, "version", "Print the hlz version.", 
+            \\  hlz version
+            \\
+        , null, null,
+            \\  hlz version
+            \\
+        ),
+    }
 }

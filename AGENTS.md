@@ -8,14 +8,14 @@
 Zig SDK, CLI, and trading terminal for Hyperliquid.
 
 - **Language**: Zig 0.15.2
-- **Binaries**: `hlz` (870KB CLI), `hlz-terminal` (1014KB terminal)
+- **Binaries**: `hlz` (891KB CLI), `hlz-terminal` (1036KB terminal)
 - **API**: Hyperliquid L1 — https://api.hyperliquid.xyz
 
 ## Build & Run
 
 ```bash
 zig build                              # Debug build → zig-out/bin/hl
-zig build -Doptimize=ReleaseSmall      # Production (870KB)
+zig build -Doptimize=ReleaseSmall      # Production (891KB)
 zig build -Dfast-crypto=true           # Custom GLV (~3.4x faster signing, not audited for servers)
 zig build test                         # Unit tests (183)
 zig build bench                        # Signing benchmarks
