@@ -133,7 +133,7 @@ pub const Signer = struct {
             const aff = p.affineCoordinates();
             break :blk .{ aff.y.isOdd(), aff.x.toBytes(.big) };
         } else blk: {
-            // custom path: 5×52-bit field + GLV endomorphism + precomputed tables (~5x faster)
+            // custom path: GLV endomorphism + 5×52-bit field + precomputed tables (~3.4x faster)
             const p = try endo.mulBasePointGLV(k.toBytes(.big), .big);
             const aff = p.toAffine();
             break :blk .{ aff.y.isOdd(), aff.x.toBytes() };

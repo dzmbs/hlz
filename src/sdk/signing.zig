@@ -72,10 +72,8 @@ pub fn signCancel(
     vault_address: ?Address,
     expires_after: ?u64,
 ) SignError!Signature {
-    var buf: [4096]u8 = undefined;
-    var p = msgpack.Packer.init(&buf);
-    try types.packActionCancel(&p, batch);
-    return signRmpAction(s, p.written(), nonce, chain, vault_address, expires_after);
+    const connection_id = try rmpHashCancel(batch, nonce, vault_address, expires_after);
+    return eip712.signAgent(s, chain.isMainnet(), connection_id);
 }
 
 
@@ -243,7 +241,7 @@ pub fn signNoop(
 pub fn signUsdSend(
     s: Signer,
     chain: Chain,
-    destination: []const u8,
+    destination: Address,
     amount: []const u8,
     time: u64,
 ) signer.SignError!Signature {
@@ -254,7 +252,7 @@ pub fn signUsdSend(
 pub fn signSpotSend(
     s: Signer,
     chain: Chain,
-    destination: []const u8,
+    destination: Address,
     token: []const u8,
     amount: []const u8,
     time: u64,
@@ -266,7 +264,7 @@ pub fn signSpotSend(
 pub fn signSendAsset(
     s: Signer,
     chain: Chain,
-    destination: []const u8,
+    destination: Address,
     source_dex: []const u8,
     destination_dex: []const u8,
     token: []const u8,
@@ -281,11 +279,56 @@ pub fn signSendAsset(
 pub fn signApproveAgent(
     s: Signer,
     chain: Chain,
-    agent_address: []const u8,
+    agent_address: Address,
     agent_name: []const u8,
     nonce: u64,
 ) signer.SignError!Signature {
     return eip712.signApproveAgent(s, chain.isMainnet(), agent_address, agent_name, nonce);
+}
+
+/// Sign a Withdraw action (bridge withdrawal, typed data path).
+pub fn signWithdraw(
+    s: Signer,
+    chain: Chain,
+    destination: Address,
+    amount: []const u8,
+    time: u64,
+) signer.SignError!Signature {
+    return eip712.signWithdraw(s, chain.isMainnet(), destination, amount, time);
+}
+
+/// Sign a UsdClassTransfer action (spot ↔ perp, typed data path).
+pub fn signUsdClassTransfer(
+    s: Signer,
+    chain: Chain,
+    amount: []const u8,
+    to_perp: bool,
+    nonce: u64,
+) signer.SignError!Signature {
+    return eip712.signUsdClassTransfer(s, chain.isMainnet(), amount, to_perp, nonce);
+}
+
+/// Sign a TokenDelegate action (staking, typed data path).
+pub fn signTokenDelegate(
+    s: Signer,
+    chain: Chain,
+    validator: Address,
+    wei: u64,
+    is_undelegate: bool,
+    nonce: u64,
+) signer.SignError!Signature {
+    return eip712.signTokenDelegate(s, chain.isMainnet(), validator, wei, is_undelegate, nonce);
+}
+
+/// Sign an ApproveBuilderFee action (typed data path).
+pub fn signApproveBuilderFee(
+    s: Signer,
+    chain: Chain,
+    max_fee_rate: []const u8,
+    builder: Address,
+    nonce: u64,
+) signer.SignError!Signature {
+    return eip712.signApproveBuilderFee(s, chain.isMainnet(), max_fee_rate, builder, nonce);
 }
 
 /// Sign a ConvertToMultiSigUser action (typed data path).
@@ -298,6 +341,197 @@ pub fn signConvertToMultiSig(
     return eip712.signConvertToMultiSigUser(s, chain.isMainnet(), signers_json, nonce);
 }
 
+
+/// Sign a UserDexAbstraction action (typed data path).
+pub fn signUserDexAbstraction(
+    s: Signer,
+    chain: Chain,
+    user: Address,
+    enabled: bool,
+    nonce: u64,
+) signer.SignError!Signature {
+    return eip712.signUserDexAbstraction(s, chain.isMainnet(), user, enabled, nonce);
+}
+
+/// Sign a UserSetAbstraction action (typed data path).
+pub fn signUserSetAbstraction(
+    s: Signer,
+    chain: Chain,
+    user: Address,
+    abstraction: []const u8,
+    nonce: u64,
+) signer.SignError!Signature {
+    return eip712.signUserSetAbstraction(s, chain.isMainnet(), user, abstraction, nonce);
+}
+
+/// Sign a VaultTransfer action (RMP path).
+pub fn signVaultTransfer(
+    s: Signer,
+    vt: types.VaultTransfer,
+    nonce: u64,
+    chain: Chain,
+    vault_address: ?Address,
+    expires_after: ?u64,
+) SignError!Signature {
+    var buf: [512]u8 = undefined;
+    var p = msgpack.Packer.init(&buf);
+    try types.packActionVaultTransfer(&p, vt);
+    return signRmpAction(s, p.written(), nonce, chain, vault_address, expires_after);
+}
+
+/// Sign a CreateSubAccount action (RMP path).
+pub fn signCreateSubAccount(
+    s: Signer,
+    csa: types.CreateSubAccount,
+    nonce: u64,
+    chain: Chain,
+    vault_address: ?Address,
+    expires_after: ?u64,
+) SignError!Signature {
+    var buf: [256]u8 = undefined;
+    var p = msgpack.Packer.init(&buf);
+    try types.packActionCreateSubAccount(&p, csa);
+    return signRmpAction(s, p.written(), nonce, chain, vault_address, expires_after);
+}
+
+/// Sign a SubAccountTransfer action (RMP path).
+pub fn signSubAccountTransfer(
+    s: Signer,
+    sat: types.SubAccountTransfer,
+    nonce: u64,
+    chain: Chain,
+    vault_address: ?Address,
+    expires_after: ?u64,
+) SignError!Signature {
+    var buf: [512]u8 = undefined;
+    var p = msgpack.Packer.init(&buf);
+    try types.packActionSubAccountTransfer(&p, sat);
+    return signRmpAction(s, p.written(), nonce, chain, vault_address, expires_after);
+}
+
+/// Sign a SubAccountSpotTransfer action (RMP path).
+pub fn signSubAccountSpotTransfer(
+    s: Signer,
+    sst: types.SubAccountSpotTransfer,
+    nonce: u64,
+    chain: Chain,
+    vault_address: ?Address,
+    expires_after: ?u64,
+) SignError!Signature {
+    var buf: [512]u8 = undefined;
+    var p = msgpack.Packer.init(&buf);
+    try types.packActionSubAccountSpotTransfer(&p, sst);
+    return signRmpAction(s, p.written(), nonce, chain, vault_address, expires_after);
+}
+
+/// Sign a TwapOrder action (RMP path).
+pub fn signTwapOrder(
+    s: Signer,
+    tw: types.TwapOrder,
+    nonce: u64,
+    chain: Chain,
+    vault_address: ?Address,
+    expires_after: ?u64,
+) SignError!Signature {
+    var buf: [512]u8 = undefined;
+    var p = msgpack.Packer.init(&buf);
+    try types.packActionTwapOrder(&p, tw);
+    return signRmpAction(s, p.written(), nonce, chain, vault_address, expires_after);
+}
+
+/// Sign a TwapCancel action (RMP path).
+pub fn signTwapCancel(
+    s: Signer,
+    tc: types.TwapCancel,
+    nonce: u64,
+    chain: Chain,
+    vault_address: ?Address,
+    expires_after: ?u64,
+) SignError!Signature {
+    var buf: [256]u8 = undefined;
+    var p = msgpack.Packer.init(&buf);
+    try types.packActionTwapCancel(&p, tc);
+    return signRmpAction(s, p.written(), nonce, chain, vault_address, expires_after);
+}
+
+/// Sign a SpotDeploy action (RMP path). Generic — takes pre-packed msgpack.
+pub fn signSpotDeploy(
+    s: Signer,
+    packed_data: []const u8,
+    nonce: u64,
+    chain: Chain,
+    expires_after: ?u64,
+) signer.SignError!Signature {
+    return signRmpAction(s, packed_data, nonce, chain, null, expires_after);
+}
+
+/// Sign a PerpDeploy action (RMP path). Generic — takes pre-packed msgpack.
+pub fn signPerpDeploy(
+    s: Signer,
+    packed_data: []const u8,
+    nonce: u64,
+    chain: Chain,
+    expires_after: ?u64,
+) signer.SignError!Signature {
+    return signRmpAction(s, packed_data, nonce, chain, null, expires_after);
+}
+
+/// Sign a CSignerAction (RMP path). Generic — takes pre-packed msgpack.
+pub fn signCSignerAction(
+    s: Signer,
+    packed_data: []const u8,
+    nonce: u64,
+    chain: Chain,
+    expires_after: ?u64,
+) signer.SignError!Signature {
+    return signRmpAction(s, packed_data, nonce, chain, null, expires_after);
+}
+
+/// Sign a CValidatorAction (RMP path). Generic — takes pre-packed msgpack.
+pub fn signCValidatorAction(
+    s: Signer,
+    packed_data: []const u8,
+    nonce: u64,
+    chain: Chain,
+    expires_after: ?u64,
+) signer.SignError!Signature {
+    return signRmpAction(s, packed_data, nonce, chain, null, expires_after);
+}
+
+/// Sign an AgentEnableDexAbstraction action (RMP path).
+pub fn signAgentEnableDexAbstraction(
+    s: Signer,
+    nonce: u64,
+    chain: Chain,
+    vault_address: ?Address,
+    expires_after: ?u64,
+) SignError!Signature {
+    var buf: [256]u8 = undefined;
+    var p = msgpack.Packer.init(&buf);
+    try p.packMapHeader(1);
+    try p.packStr("type");
+    try p.packStr("agentEnableDexAbstraction");
+    return signRmpAction(s, p.written(), nonce, chain, vault_address, expires_after);
+}
+
+/// Sign an AgentSetAbstraction action (RMP path).
+pub fn signAgentSetAbstraction(
+    s: Signer,
+    abstraction_json: []const u8,
+    nonce: u64,
+    chain: Chain,
+    vault_address: ?Address,
+    expires_after: ?u64,
+) SignError!Signature {
+    var buf: [1024]u8 = undefined;
+    var p = msgpack.Packer.init(&buf);
+    try p.packMapHeader(2);
+    try p.packStr("type");
+    try p.packStr("agentSetAbstraction");
+    try p.packStr("abstraction");
+    try p.packStr(abstraction_json);
+    return signRmpAction(s, p.written(), nonce, chain, vault_address, expires_after);
+}
 
 const Decimal = @import("../lib/math/decimal.zig").Decimal;
 

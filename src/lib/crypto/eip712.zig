@@ -30,6 +30,19 @@ fn encodeAddress(addr: [20]u8) [32]u8 {
     return buf;
 }
 
+/// Format [20]u8 address as "0x" + lowercase hex.
+pub fn addressToHex(addr: [20]u8) [42]u8 {
+    const hex_chars = "0123456789abcdef";
+    var buf: [42]u8 = undefined;
+    buf[0] = '0';
+    buf[1] = 'x';
+    for (addr, 0..) |b, i| {
+        buf[2 + i * 2] = hex_chars[b >> 4];
+        buf[3 + i * 2] = hex_chars[b & 0xf];
+    }
+    return buf;
+}
+
 /// Hash a string value for EIP-712 (keccak256 of the raw bytes).
 fn hashString(s: []const u8) Hash {
     return signer.keccak256(s);
@@ -90,10 +103,14 @@ pub const TESTNET_DOMAIN = Domain{
     .verifying_contract = [_]u8{0} ** 20,
 };
 
-// Pre-computed domain separators
-pub const CORE_DOMAIN_SEPARATOR = blk: { @setEvalBranchQuota(100_000); break :blk domainSeparator(CORE_DOMAIN); };
-pub const MAINNET_DOMAIN_SEPARATOR = blk: { @setEvalBranchQuota(100_000); break :blk domainSeparator(MAINNET_DOMAIN); };
-pub const TESTNET_DOMAIN_SEPARATOR = blk: { @setEvalBranchQuota(100_000); break :blk domainSeparator(TESTNET_DOMAIN); };
+// Pre-computed domain separators (comptime keccak256 needs higher branch quota)
+fn comptimeDomainSeparator(domain: Domain) Hash {
+    @setEvalBranchQuota(100_000);
+    return domainSeparator(domain);
+}
+pub const CORE_DOMAIN_SEPARATOR = comptimeDomainSeparator(CORE_DOMAIN);
+pub const MAINNET_DOMAIN_SEPARATOR = comptimeDomainSeparator(MAINNET_DOMAIN);
+pub const TESTNET_DOMAIN_SEPARATOR = comptimeDomainSeparator(TESTNET_DOMAIN);
 
 // Hyperliquid wraps types with "HyperliquidTransaction:" prefix for typed data path.
 
@@ -126,6 +143,30 @@ pub const CONVERT_MULTISIG_TYPEHASH = keccak256(CONVERT_MULTISIG_TYPE);
 // SendMultiSig
 pub const SEND_MULTISIG_TYPE = HL_PREFIX ++ "SendMultiSig(string hyperliquidChain,bytes32 multiSigActionHash,uint64 nonce)";
 pub const SEND_MULTISIG_TYPEHASH = keccak256(SEND_MULTISIG_TYPE);
+
+// Withdraw (withdraw3 — bridge withdrawal)
+pub const WITHDRAW_TYPE = HL_PREFIX ++ "Withdraw(string hyperliquidChain,string destination,string amount,uint64 time)";
+pub const WITHDRAW_TYPEHASH = keccak256(WITHDRAW_TYPE);
+
+// UsdClassTransfer (spot ↔ perp internal transfer)
+pub const USD_CLASS_TRANSFER_TYPE = HL_PREFIX ++ "UsdClassTransfer(string hyperliquidChain,string amount,bool toPerp,uint64 nonce)";
+pub const USD_CLASS_TRANSFER_TYPEHASH = keccak256(USD_CLASS_TRANSFER_TYPE);
+
+// TokenDelegate (staking)
+pub const TOKEN_DELEGATE_TYPE = HL_PREFIX ++ "TokenDelegate(string hyperliquidChain,address validator,uint64 wei,bool isUndelegate,uint64 nonce)";
+pub const TOKEN_DELEGATE_TYPEHASH = keccak256(TOKEN_DELEGATE_TYPE);
+
+// ApproveBuilderFee
+pub const APPROVE_BUILDER_FEE_TYPE = HL_PREFIX ++ "ApproveBuilderFee(string hyperliquidChain,string maxFeeRate,address builder,uint64 nonce)";
+pub const APPROVE_BUILDER_FEE_TYPEHASH = keccak256(APPROVE_BUILDER_FEE_TYPE);
+
+// UserDexAbstraction
+pub const USER_DEX_ABSTRACTION_TYPE = HL_PREFIX ++ "UserDexAbstraction(string hyperliquidChain,address user,bool enabled,uint64 nonce)";
+pub const USER_DEX_ABSTRACTION_TYPEHASH = keccak256(USER_DEX_ABSTRACTION_TYPE);
+
+// UserSetAbstraction
+pub const USER_SET_ABSTRACTION_TYPE = HL_PREFIX ++ "UserSetAbstraction(string hyperliquidChain,address user,string abstraction,uint64 nonce)";
+pub const USER_SET_ABSTRACTION_TYPEHASH = keccak256(USER_SET_ABSTRACTION_TYPE);
 
 
 /// Hash the Agent struct (RMP signing path).
@@ -231,6 +272,92 @@ pub fn hashSendMultiSig(chain: []const u8, multi_sig_action_hash: Hash, nonce: u
 }
 
 
+/// Hash Withdraw struct (same shape as UsdSend: chain, destination, amount, time).
+pub fn hashWithdraw(chain: []const u8, destination: []const u8, amount: []const u8, time: u64) Hash {
+    var hasher = Keccak256.init(.{});
+    hasher.update(&WITHDRAW_TYPEHASH);
+    hasher.update(&hashString(chain));
+    hasher.update(&hashString(destination));
+    hasher.update(&hashString(amount));
+    hasher.update(&encodeUint64(time));
+    var hash: Hash = undefined;
+    hasher.final(&hash);
+    return hash;
+}
+
+/// Hash UsdClassTransfer struct.
+pub fn hashUsdClassTransfer(chain: []const u8, amount: []const u8, to_perp: bool, nonce: u64) Hash {
+    var hasher = Keccak256.init(.{});
+    hasher.update(&USD_CLASS_TRANSFER_TYPEHASH);
+    hasher.update(&hashString(chain));
+    hasher.update(&hashString(amount));
+    // bool is encoded as uint256 (0 or 1)
+    var bool_buf: [32]u8 = [_]u8{0} ** 32;
+    if (to_perp) bool_buf[31] = 1;
+    hasher.update(&bool_buf);
+    hasher.update(&encodeUint64(nonce));
+    var hash: Hash = undefined;
+    hasher.final(&hash);
+    return hash;
+}
+
+/// Hash TokenDelegate struct.
+pub fn hashTokenDelegate(chain: []const u8, validator: [20]u8, wei: u64, is_undelegate: bool, nonce: u64) Hash {
+    var hasher = Keccak256.init(.{});
+    hasher.update(&TOKEN_DELEGATE_TYPEHASH);
+    hasher.update(&hashString(chain));
+    hasher.update(&encodeAddress(validator));
+    hasher.update(&encodeUint64(wei));
+    var bool_buf: [32]u8 = [_]u8{0} ** 32;
+    if (is_undelegate) bool_buf[31] = 1;
+    hasher.update(&bool_buf);
+    hasher.update(&encodeUint64(nonce));
+    var hash: Hash = undefined;
+    hasher.final(&hash);
+    return hash;
+}
+
+/// Hash ApproveBuilderFee struct.
+pub fn hashApproveBuilderFee(chain: []const u8, max_fee_rate: []const u8, builder: [20]u8, nonce: u64) Hash {
+    var hasher = Keccak256.init(.{});
+    hasher.update(&APPROVE_BUILDER_FEE_TYPEHASH);
+    hasher.update(&hashString(chain));
+    hasher.update(&hashString(max_fee_rate));
+    hasher.update(&encodeAddress(builder));
+    hasher.update(&encodeUint64(nonce));
+    var hash: Hash = undefined;
+    hasher.final(&hash);
+    return hash;
+}
+
+/// Hash UserDexAbstraction struct.
+pub fn hashUserDexAbstraction(chain: []const u8, user: [20]u8, enabled: bool, nonce: u64) Hash {
+    var hasher = Keccak256.init(.{});
+    hasher.update(&USER_DEX_ABSTRACTION_TYPEHASH);
+    hasher.update(&hashString(chain));
+    hasher.update(&encodeAddress(user));
+    var bool_buf: [32]u8 = [_]u8{0} ** 32;
+    if (enabled) bool_buf[31] = 1;
+    hasher.update(&bool_buf);
+    hasher.update(&encodeUint64(nonce));
+    var hash: Hash = undefined;
+    hasher.final(&hash);
+    return hash;
+}
+
+/// Hash UserSetAbstraction struct.
+pub fn hashUserSetAbstraction(chain: []const u8, user: [20]u8, abstraction: []const u8, nonce: u64) Hash {
+    var hasher = Keccak256.init(.{});
+    hasher.update(&USER_SET_ABSTRACTION_TYPEHASH);
+    hasher.update(&hashString(chain));
+    hasher.update(&encodeAddress(user));
+    hasher.update(&hashString(abstraction));
+    hasher.update(&encodeUint64(nonce));
+    var hash: Hash = undefined;
+    hasher.final(&hash);
+    return hash;
+}
+
 /// Compute the EIP-712 signing hash: keccak256(0x19 ++ 0x01 ++ domainSeparator ++ structHash)
 pub fn signingHash(domain_sep: Hash, struct_hash: Hash) Hash {
     var hasher = Keccak256.init(.{});
@@ -255,12 +382,13 @@ pub fn signAgent(s: signer.Signer, chain_is_mainnet: bool, connection_id: Hash) 
 pub fn signUsdSend(
     s: signer.Signer,
     is_mainnet: bool,
-    destination: []const u8,
+    destination: [20]u8,
     amount: []const u8,
     time: u64,
 ) signer.SignError!signer.Signature {
     const chain_str: []const u8 = if (is_mainnet) "Mainnet" else "Testnet";
-    const struct_hash = hashUsdSend(chain_str, destination, amount, time);
+    const dest_hex = addressToHex(destination);
+    const struct_hash = hashUsdSend(chain_str, &dest_hex, amount, time);
     const domain_sep = if (is_mainnet) MAINNET_DOMAIN_SEPARATOR else TESTNET_DOMAIN_SEPARATOR;
     const hash = signingHash(domain_sep, struct_hash);
     return s.sign(hash);
@@ -270,13 +398,14 @@ pub fn signUsdSend(
 pub fn signSpotSend(
     s: signer.Signer,
     is_mainnet: bool,
-    destination: []const u8,
+    destination: [20]u8,
     token: []const u8,
     amount: []const u8,
     time: u64,
 ) signer.SignError!signer.Signature {
     const chain_str: []const u8 = if (is_mainnet) "Mainnet" else "Testnet";
-    const struct_hash = hashSpotSend(chain_str, destination, token, amount, time);
+    const dest_hex = addressToHex(destination);
+    const struct_hash = hashSpotSend(chain_str, &dest_hex, token, amount, time);
     const domain_sep = if (is_mainnet) MAINNET_DOMAIN_SEPARATOR else TESTNET_DOMAIN_SEPARATOR;
     return s.sign(signingHash(domain_sep, struct_hash));
 }
@@ -285,7 +414,7 @@ pub fn signSpotSend(
 pub fn signSendAsset(
     s: signer.Signer,
     is_mainnet: bool,
-    destination: []const u8,
+    destination: [20]u8,
     source_dex: []const u8,
     destination_dex: []const u8,
     token: []const u8,
@@ -294,34 +423,22 @@ pub fn signSendAsset(
     nonce: u64,
 ) signer.SignError!signer.Signature {
     const chain_str: []const u8 = if (is_mainnet) "Mainnet" else "Testnet";
-    const struct_hash = hashSendAsset(chain_str, destination, source_dex, destination_dex, token, amount, from_sub_account, nonce);
+    const dest_hex = addressToHex(destination);
+    const struct_hash = hashSendAsset(chain_str, &dest_hex, source_dex, destination_dex, token, amount, from_sub_account, nonce);
     const domain_sep = if (is_mainnet) MAINNET_DOMAIN_SEPARATOR else TESTNET_DOMAIN_SEPARATOR;
     return s.sign(signingHash(domain_sep, struct_hash));
-}
-
-/// Parse a hex address string (0x-prefixed, 42 chars) into a [20]u8.
-fn parseAddress(hex: []const u8) ?[20]u8 {
-    const start: usize = if (hex.len >= 2 and hex[0] == '0' and (hex[1] == 'x' or hex[1] == 'X')) 2 else 0;
-    const clean = hex[start..];
-    if (clean.len != 40) return null;
-    var addr: [20]u8 = undefined;
-    for (0..20) |i| {
-        addr[i] = std.fmt.parseInt(u8, clean[i * 2 ..][0..2], 16) catch return null;
-    }
-    return addr;
 }
 
 /// Sign an ApproveAgent (typed data path).
 pub fn signApproveAgent(
     s: signer.Signer,
     is_mainnet: bool,
-    agent_address: []const u8,
+    agent_address: [20]u8,
     agent_name: []const u8,
     nonce: u64,
 ) signer.SignError!signer.Signature {
     const chain_str: []const u8 = if (is_mainnet) "Mainnet" else "Testnet";
-    const addr = parseAddress(agent_address) orelse return error.IdentityElement;
-    const struct_hash = hashApproveAgent(chain_str, addr, agent_name, nonce);
+    const struct_hash = hashApproveAgent(chain_str, agent_address, agent_name, nonce);
     const domain_sep = if (is_mainnet) MAINNET_DOMAIN_SEPARATOR else TESTNET_DOMAIN_SEPARATOR;
     return s.sign(signingHash(domain_sep, struct_hash));
 }
@@ -353,6 +470,92 @@ pub fn signSendMultiSig(
     return s.sign(signingHash(domain_sep, struct_hash));
 }
 
+
+/// Sign a Withdraw (bridge withdrawal, typed data path).
+pub fn signWithdraw(
+    s: signer.Signer,
+    is_mainnet: bool,
+    destination: [20]u8,
+    amount: []const u8,
+    time: u64,
+) signer.SignError!signer.Signature {
+    const chain_str: []const u8 = if (is_mainnet) "Mainnet" else "Testnet";
+    const dest_hex = addressToHex(destination);
+    const struct_hash = hashWithdraw(chain_str, &dest_hex, amount, time);
+    const domain_sep = if (is_mainnet) MAINNET_DOMAIN_SEPARATOR else TESTNET_DOMAIN_SEPARATOR;
+    return s.sign(signingHash(domain_sep, struct_hash));
+}
+
+/// Sign a UsdClassTransfer (spot ↔ perp, typed data path).
+pub fn signUsdClassTransfer(
+    s: signer.Signer,
+    is_mainnet: bool,
+    amount: []const u8,
+    to_perp: bool,
+    nonce: u64,
+) signer.SignError!signer.Signature {
+    const chain_str: []const u8 = if (is_mainnet) "Mainnet" else "Testnet";
+    const struct_hash = hashUsdClassTransfer(chain_str, amount, to_perp, nonce);
+    const domain_sep = if (is_mainnet) MAINNET_DOMAIN_SEPARATOR else TESTNET_DOMAIN_SEPARATOR;
+    return s.sign(signingHash(domain_sep, struct_hash));
+}
+
+/// Sign a TokenDelegate (staking, typed data path).
+pub fn signTokenDelegate(
+    s: signer.Signer,
+    is_mainnet: bool,
+    validator: [20]u8,
+    wei: u64,
+    is_undelegate: bool,
+    nonce: u64,
+) signer.SignError!signer.Signature {
+    const chain_str: []const u8 = if (is_mainnet) "Mainnet" else "Testnet";
+    const struct_hash = hashTokenDelegate(chain_str, validator, wei, is_undelegate, nonce);
+    const domain_sep = if (is_mainnet) MAINNET_DOMAIN_SEPARATOR else TESTNET_DOMAIN_SEPARATOR;
+    return s.sign(signingHash(domain_sep, struct_hash));
+}
+
+/// Sign an ApproveBuilderFee (typed data path).
+pub fn signApproveBuilderFee(
+    s: signer.Signer,
+    is_mainnet: bool,
+    max_fee_rate: []const u8,
+    builder: [20]u8,
+    nonce: u64,
+) signer.SignError!signer.Signature {
+    const chain_str: []const u8 = if (is_mainnet) "Mainnet" else "Testnet";
+    const struct_hash = hashApproveBuilderFee(chain_str, max_fee_rate, builder, nonce);
+    const domain_sep = if (is_mainnet) MAINNET_DOMAIN_SEPARATOR else TESTNET_DOMAIN_SEPARATOR;
+    return s.sign(signingHash(domain_sep, struct_hash));
+}
+
+/// Sign a UserDexAbstraction (typed data path).
+pub fn signUserDexAbstraction(
+    s: signer.Signer,
+    is_mainnet: bool,
+    user: [20]u8,
+    enabled: bool,
+    nonce: u64,
+) signer.SignError!signer.Signature {
+    const chain_str: []const u8 = if (is_mainnet) "Mainnet" else "Testnet";
+    const struct_hash = hashUserDexAbstraction(chain_str, user, enabled, nonce);
+    const domain_sep = if (is_mainnet) MAINNET_DOMAIN_SEPARATOR else TESTNET_DOMAIN_SEPARATOR;
+    return s.sign(signingHash(domain_sep, struct_hash));
+}
+
+/// Sign a UserSetAbstraction (typed data path).
+pub fn signUserSetAbstraction(
+    s: signer.Signer,
+    is_mainnet: bool,
+    user: [20]u8,
+    abstraction: []const u8,
+    nonce: u64,
+) signer.SignError!signer.Signature {
+    const chain_str: []const u8 = if (is_mainnet) "Mainnet" else "Testnet";
+    const struct_hash = hashUserSetAbstraction(chain_str, user, abstraction, nonce);
+    const domain_sep = if (is_mainnet) MAINNET_DOMAIN_SEPARATOR else TESTNET_DOMAIN_SEPARATOR;
+    return s.sign(signingHash(domain_sep, struct_hash));
+}
 
 test "eip712: domain separator is deterministic" {
     const sep1 = domainSeparator(CORE_DOMAIN);
@@ -427,6 +630,12 @@ test "eip712: type hashes are non-zero" {
     try std.testing.expect(!std.mem.eql(u8, &APPROVE_AGENT_TYPEHASH, &zero));
     try std.testing.expect(!std.mem.eql(u8, &CONVERT_MULTISIG_TYPEHASH, &zero));
     try std.testing.expect(!std.mem.eql(u8, &SEND_MULTISIG_TYPEHASH, &zero));
+    try std.testing.expect(!std.mem.eql(u8, &WITHDRAW_TYPEHASH, &zero));
+    try std.testing.expect(!std.mem.eql(u8, &USD_CLASS_TRANSFER_TYPEHASH, &zero));
+    try std.testing.expect(!std.mem.eql(u8, &TOKEN_DELEGATE_TYPEHASH, &zero));
+    try std.testing.expect(!std.mem.eql(u8, &APPROVE_BUILDER_FEE_TYPEHASH, &zero));
+    try std.testing.expect(!std.mem.eql(u8, &USER_DEX_ABSTRACTION_TYPEHASH, &zero));
+    try std.testing.expect(!std.mem.eql(u8, &USER_SET_ABSTRACTION_TYPEHASH, &zero));
 }
 
 test "eip712: all type hashes are unique" {
@@ -438,6 +647,12 @@ test "eip712: all type hashes are unique" {
         &APPROVE_AGENT_TYPEHASH,
         &CONVERT_MULTISIG_TYPEHASH,
         &SEND_MULTISIG_TYPEHASH,
+        &WITHDRAW_TYPEHASH,
+        &USD_CLASS_TRANSFER_TYPEHASH,
+        &TOKEN_DELEGATE_TYPEHASH,
+        &APPROVE_BUILDER_FEE_TYPEHASH,
+        &USER_DEX_ABSTRACTION_TYPEHASH,
+        &USER_SET_ABSTRACTION_TYPEHASH,
     };
     for (hashes, 0..) |a, i| {
         for (hashes[i + 1 ..]) |b| {

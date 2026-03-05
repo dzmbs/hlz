@@ -280,7 +280,18 @@ pub const ActionTag = enum {
     setReferrer,
     multiSig,
     noop,
-
+    vaultTransfer,
+    createSubAccount,
+    subAccountTransfer,
+    subAccountSpotTransfer,
+    twapOrder,
+    twapCancel,
+    spotDeploy,
+    perpDeploy,
+    CSignerAction,
+    CValidatorAction,
+    agentEnableDexAbstraction,
+    agentSetAbstraction,
 };
 
 /// Pack an Action::Order to msgpack (with serde tag = "type").
@@ -431,6 +442,597 @@ pub fn packActionNoop(p: *msgpack.Packer) msgpack.PackError!void {
     try p.packStr(@tagName(ActionTag.noop));
 }
 
+// ── Account & Transfer Actions ────────────────────────────────
+
+pub const VaultTransfer = struct {
+    vault_address: []const u8,
+    is_deposit: bool,
+    usd: u64,
+};
+
+pub const CreateSubAccount = struct {
+    name: []const u8,
+};
+
+pub const SubAccountTransfer = struct {
+    sub_account_user: []const u8,
+    is_deposit: bool,
+    usd: u64,
+};
+
+pub const SubAccountSpotTransfer = struct {
+    sub_account_user: []const u8,
+    is_deposit: bool,
+    token: []const u8,
+    amount: []const u8,
+};
+
+pub const TwapOrder = struct {
+    asset: usize,
+    is_buy: bool,
+    sz: Decimal,
+    reduce_only: bool,
+    duration_min: u64,
+    randomize: bool,
+};
+
+pub const TwapCancel = struct {
+    asset: usize,
+    twap_id: u64,
+};
+
+/// Pack an Action::VaultTransfer to msgpack (with serde tag).
+pub fn packActionVaultTransfer(p: *msgpack.Packer, vt: VaultTransfer) msgpack.PackError!void {
+    try p.packMapHeader(4);
+    try p.packStr("type");
+    try p.packStr(@tagName(ActionTag.vaultTransfer));
+    try p.packStr("vaultAddress");
+    try p.packStr(vt.vault_address);
+    try p.packStr("isDeposit");
+    try p.packBool(vt.is_deposit);
+    try p.packStr("usd");
+    try p.packUint(vt.usd);
+}
+
+/// Pack an Action::CreateSubAccount to msgpack (with serde tag).
+pub fn packActionCreateSubAccount(p: *msgpack.Packer, csa: CreateSubAccount) msgpack.PackError!void {
+    try p.packMapHeader(2);
+    try p.packStr("type");
+    try p.packStr(@tagName(ActionTag.createSubAccount));
+    try p.packStr("name");
+    try p.packStr(csa.name);
+}
+
+/// Pack an Action::SubAccountTransfer to msgpack (with serde tag).
+pub fn packActionSubAccountTransfer(p: *msgpack.Packer, sat: SubAccountTransfer) msgpack.PackError!void {
+    try p.packMapHeader(4);
+    try p.packStr("type");
+    try p.packStr(@tagName(ActionTag.subAccountTransfer));
+    try p.packStr("subAccountUser");
+    try p.packStr(sat.sub_account_user);
+    try p.packStr("isDeposit");
+    try p.packBool(sat.is_deposit);
+    try p.packStr("usd");
+    try p.packUint(sat.usd);
+}
+
+/// Pack an Action::SubAccountSpotTransfer to msgpack (with serde tag).
+pub fn packActionSubAccountSpotTransfer(p: *msgpack.Packer, sst: SubAccountSpotTransfer) msgpack.PackError!void {
+    try p.packMapHeader(5);
+    try p.packStr("type");
+    try p.packStr(@tagName(ActionTag.subAccountSpotTransfer));
+    try p.packStr("subAccountUser");
+    try p.packStr(sst.sub_account_user);
+    try p.packStr("isDeposit");
+    try p.packBool(sst.is_deposit);
+    try p.packStr("token");
+    try p.packStr(sst.token);
+    try p.packStr("amount");
+    try p.packStr(sst.amount);
+}
+
+/// Pack an Action::TwapOrder to msgpack (with serde tag).
+pub fn packActionTwapOrder(p: *msgpack.Packer, tw: TwapOrder) msgpack.PackError!void {
+    try p.packMapHeader(2); // {type, twap}
+    try p.packStr("type");
+    try p.packStr(@tagName(ActionTag.twapOrder));
+    try p.packStr("twap");
+    try p.packMapHeader(6); // {a, b, s, r, m, t}
+    try p.packStr("a");
+    try p.packUint(@intCast(tw.asset));
+    try p.packStr("b");
+    try p.packBool(tw.is_buy);
+    try p.packStr("s");
+    var sz_buf: [64]u8 = undefined;
+    const sz_str = tw.sz.normalize().toString(&sz_buf) catch return error.BufferOverflow;
+    try p.packStr(sz_str);
+    try p.packStr("r");
+    try p.packBool(tw.reduce_only);
+    try p.packStr("m");
+    try p.packUint(tw.duration_min);
+    try p.packStr("t");
+    try p.packBool(tw.randomize);
+}
+
+/// Pack an Action::TwapCancel to msgpack (with serde tag).
+pub fn packActionTwapCancel(p: *msgpack.Packer, tc: TwapCancel) msgpack.PackError!void {
+    try p.packMapHeader(3);
+    try p.packStr("type");
+    try p.packStr(@tagName(ActionTag.twapCancel));
+    try p.packStr("a");
+    try p.packUint(@intCast(tc.asset));
+    try p.packStr("t");
+    try p.packUint(tc.twap_id);
+}
+
+// ── Spot Deploy Actions ───────────────────────────────────────
+
+pub const SpotDeployRegisterToken = struct {
+    name: []const u8,
+    sz_decimals: u32,
+    wei_decimals: u32,
+    max_gas: u64,
+    full_name: []const u8,
+};
+
+pub fn packActionSpotDeployRegisterToken(p: *msgpack.Packer, rt: SpotDeployRegisterToken) msgpack.PackError!void {
+    try p.packMapHeader(2);
+    try p.packStr("type");
+    try p.packStr("spotDeploy");
+    try p.packStr("registerToken2");
+    try p.packMapHeader(3);
+    try p.packStr("spec");
+    try p.packMapHeader(3);
+    try p.packStr("name");
+    try p.packStr(rt.name);
+    try p.packStr("szDecimals");
+    try p.packUint(@intCast(rt.sz_decimals));
+    try p.packStr("weiDecimals");
+    try p.packUint(@intCast(rt.wei_decimals));
+    try p.packStr("maxGas");
+    try p.packUint(rt.max_gas);
+    try p.packStr("fullName");
+    try p.packStr(rt.full_name);
+}
+
+pub const SpotDeployGenesis = struct {
+    token: u32,
+    max_supply: []const u8,
+    no_hyperliquidity: bool,
+};
+
+pub fn packActionSpotDeployGenesis(p: *msgpack.Packer, g: SpotDeployGenesis) msgpack.PackError!void {
+    const n_fields: u32 = if (g.no_hyperliquidity) 3 else 2;
+    try p.packMapHeader(2);
+    try p.packStr("type");
+    try p.packStr("spotDeploy");
+    try p.packStr("genesis");
+    try p.packMapHeader(n_fields);
+    try p.packStr("token");
+    try p.packUint(@intCast(g.token));
+    try p.packStr("maxSupply");
+    try p.packStr(g.max_supply);
+    if (g.no_hyperliquidity) {
+        try p.packStr("noHyperliquidity");
+        try p.packBool(true);
+    }
+}
+
+pub const SpotDeployUserGenesis = struct {
+    token: u32,
+    user_and_wei: []const [2][]const u8, // [[addr, wei], ...]
+    existing_token_and_wei: []const struct { token: u32, wei: []const u8 },
+};
+
+/// Pack a spotDeploy userGenesis action.
+/// Caller must pass lowercase hex addresses in `user_and_wei` pairs  — exchange expects lowercase hex.
+pub fn packActionSpotDeployUserGenesis(p: *msgpack.Packer, ug: SpotDeployUserGenesis) msgpack.PackError!void {
+    try p.packMapHeader(2);
+    try p.packStr("type");
+    try p.packStr("spotDeploy");
+    try p.packStr("userGenesis");
+    try p.packMapHeader(3);
+    try p.packStr("token");
+    try p.packUint(@intCast(ug.token));
+    try p.packStr("userAndWei");
+    try p.packArrayHeader(@intCast(ug.user_and_wei.len));
+    for (ug.user_and_wei) |pair| {
+        try p.packArrayHeader(2);
+        try p.packStr(pair[0]);
+        try p.packStr(pair[1]);
+    }
+    try p.packStr("existingTokenAndWei");
+    try p.packArrayHeader(@intCast(ug.existing_token_and_wei.len));
+    for (ug.existing_token_and_wei) |pair| {
+        try p.packArrayHeader(2);
+        try p.packUint(@intCast(pair.token));
+        try p.packStr(pair.wei);
+    }
+}
+
+pub const SpotDeployRegisterSpot = struct {
+    base_token: u32,
+    quote_token: u32,
+};
+
+pub fn packActionSpotDeployRegisterSpot(p: *msgpack.Packer, rs: SpotDeployRegisterSpot) msgpack.PackError!void {
+    try p.packMapHeader(2);
+    try p.packStr("type");
+    try p.packStr("spotDeploy");
+    try p.packStr("registerSpot");
+    try p.packMapHeader(1);
+    try p.packStr("tokens");
+    try p.packArrayHeader(2);
+    try p.packUint(@intCast(rs.base_token));
+    try p.packUint(@intCast(rs.quote_token));
+}
+
+pub const SpotDeployRegisterHyperliquidity = struct {
+    spot: u32,
+    start_px: []const u8,
+    order_sz: []const u8,
+    n_orders: u32,
+    n_seeded_levels: ?u32,
+};
+
+pub fn packActionSpotDeployRegisterHyperliquidity(p: *msgpack.Packer, rh: SpotDeployRegisterHyperliquidity) msgpack.PackError!void {
+    const n_fields: u32 = if (rh.n_seeded_levels != null) 5 else 4;
+    try p.packMapHeader(2);
+    try p.packStr("type");
+    try p.packStr("spotDeploy");
+    try p.packStr("registerHyperliquidity");
+    try p.packMapHeader(n_fields);
+    try p.packStr("spot");
+    try p.packUint(@intCast(rh.spot));
+    try p.packStr("startPx");
+    try p.packStr(rh.start_px);
+    try p.packStr("orderSz");
+    try p.packStr(rh.order_sz);
+    try p.packStr("nOrders");
+    try p.packUint(@intCast(rh.n_orders));
+    if (rh.n_seeded_levels) |n| {
+        try p.packStr("nSeededLevels");
+        try p.packUint(@intCast(n));
+    }
+}
+
+/// Simple token action: enableFreezePrivilege, revokeFreezePrivilege, enableQuoteToken
+pub fn packActionSpotDeployTokenAction(p: *msgpack.Packer, variant: []const u8, token: u32) msgpack.PackError!void {
+    try p.packMapHeader(2);
+    try p.packStr("type");
+    try p.packStr("spotDeploy");
+    try p.packStr(variant);
+    try p.packMapHeader(1);
+    try p.packStr("token");
+    try p.packUint(@intCast(token));
+}
+
+/// Pack a spotDeploy freezeUser action.
+/// Caller must pass lowercase hex address for `user`  — exchange expects lowercase hex.
+pub fn packActionSpotDeployFreezeUser(p: *msgpack.Packer, token: u32, user: []const u8, freeze: bool) msgpack.PackError!void {
+    try p.packMapHeader(2);
+    try p.packStr("type");
+    try p.packStr("spotDeploy");
+    try p.packStr("freezeUser");
+    try p.packMapHeader(3);
+    try p.packStr("token");
+    try p.packUint(@intCast(token));
+    try p.packStr("user");
+    try p.packStr(user);
+    try p.packStr("freeze");
+    try p.packBool(freeze);
+}
+
+pub fn packActionSpotDeploySetTradingFeeShare(p: *msgpack.Packer, token: u32, share: []const u8) msgpack.PackError!void {
+    try p.packMapHeader(2);
+    try p.packStr("type");
+    try p.packStr("spotDeploy");
+    try p.packStr("setDeployerTradingFeeShare");
+    try p.packMapHeader(2);
+    try p.packStr("token");
+    try p.packUint(@intCast(token));
+    try p.packStr("share");
+    try p.packStr(share);
+}
+
+// ── Perp Deploy Actions ───────────────────────────────────────
+
+pub const PerpDeployRegisterAsset = struct {
+    dex: []const u8,
+    max_gas: ?u64,
+    coin: []const u8,
+    sz_decimals: u32,
+    oracle_px: []const u8,
+    margin_table_id: u32,
+    only_isolated: bool,
+    // Optional schema — set all three or none
+    schema_full_name: ?[]const u8,
+    schema_collateral_token: ?u32,
+    schema_oracle_updater: ?[]const u8,
+};
+
+/// Pack a perpDeploy registerAsset action.
+/// Caller must pass lowercase hex address for `schema_oracle_updater`  — exchange expects lowercase hex.
+pub fn packActionPerpDeployRegisterAsset(p: *msgpack.Packer, ra: PerpDeployRegisterAsset) msgpack.PackError!void {
+    try p.packMapHeader(2);
+    try p.packStr("type");
+    try p.packStr("perpDeploy");
+    try p.packStr("registerAsset");
+    try p.packMapHeader(4);
+    try p.packStr("maxGas");
+    if (ra.max_gas) |mg| {
+        try p.packUint(mg);
+    } else {
+        try p.packNil();
+    }
+    try p.packStr("assetRequest");
+    try p.packMapHeader(5);
+    try p.packStr("coin");
+    try p.packStr(ra.coin);
+    try p.packStr("szDecimals");
+    try p.packUint(@intCast(ra.sz_decimals));
+    try p.packStr("oraclePx");
+    try p.packStr(ra.oracle_px);
+    try p.packStr("marginTableId");
+    try p.packUint(@intCast(ra.margin_table_id));
+    try p.packStr("onlyIsolated");
+    try p.packBool(ra.only_isolated);
+    try p.packStr("dex");
+    try p.packStr(ra.dex);
+    try p.packStr("schema");
+    if (ra.schema_full_name) |fn_| {
+        try p.packMapHeader(3);
+        try p.packStr("fullName");
+        try p.packStr(fn_);
+        try p.packStr("collateralToken");
+        if (ra.schema_collateral_token) |ct| {
+            try p.packUint(@intCast(ct));
+        } else {
+            try p.packNil();
+        }
+        try p.packStr("oracleUpdater");
+        if (ra.schema_oracle_updater) |ou| {
+            try p.packStr(ou);
+        } else {
+            try p.packNil();
+        }
+    } else {
+        try p.packNil();
+    }
+}
+
+/// OraclePx entry: [coin, px] sorted pair
+pub const OraclePxEntry = struct { coin: []const u8, px: []const u8 };
+
+/// Pack a perpDeploy setOracle action.
+/// IMPORTANT: All entry arrays (oracle_pxs, each mark_pxs group, external_perp_pxs)
+/// must be lexicographically sorted by coin name before calling this function.
+/// Unsorted inputs produce a different hash and the signature will be rejected.
+pub fn packActionPerpDeploySetOracle(
+    p: *msgpack.Packer,
+    dex: []const u8,
+    oracle_pxs: []const OraclePxEntry,
+    mark_pxs: []const []const OraclePxEntry,
+    external_perp_pxs: []const OraclePxEntry,
+) msgpack.PackError!void {
+    try p.packMapHeader(2);
+    try p.packStr("type");
+    try p.packStr("perpDeploy");
+    try p.packStr("setOracle");
+    try p.packMapHeader(4);
+    try p.packStr("dex");
+    try p.packStr(dex);
+    try p.packStr("oraclePxs");
+    try p.packArrayHeader(@intCast(oracle_pxs.len));
+    for (oracle_pxs) |entry| {
+        try p.packArrayHeader(2);
+        try p.packStr(entry.coin);
+        try p.packStr(entry.px);
+    }
+    try p.packStr("markPxs");
+    try p.packArrayHeader(@intCast(mark_pxs.len));
+    for (mark_pxs) |group| {
+        try p.packArrayHeader(@intCast(group.len));
+        for (group) |entry| {
+            try p.packArrayHeader(2);
+            try p.packStr(entry.coin);
+            try p.packStr(entry.px);
+        }
+    }
+    try p.packStr("externalPerpPxs");
+    try p.packArrayHeader(@intCast(external_perp_pxs.len));
+    for (external_perp_pxs) |entry| {
+        try p.packArrayHeader(2);
+        try p.packStr(entry.coin);
+        try p.packStr(entry.px);
+    }
+}
+
+// ── Validator/Signer Actions ──────────────────────────────────
+
+pub fn packActionCSignerJailSelf(p: *msgpack.Packer) msgpack.PackError!void {
+    try p.packMapHeader(2);
+    try p.packStr("type");
+    try p.packStr("CSignerAction");
+    try p.packStr("jailSelf");
+    try p.packNil();
+}
+
+pub fn packActionCSignerUnjailSelf(p: *msgpack.Packer) msgpack.PackError!void {
+    try p.packMapHeader(2);
+    try p.packStr("type");
+    try p.packStr("CSignerAction");
+    try p.packStr("unjailSelf");
+    try p.packNil();
+}
+
+pub const ValidatorProfile = struct {
+    node_ip: []const u8,
+    name: []const u8,
+    description: []const u8,
+    delegations_disabled: bool,
+    commission_bps: u32,
+    signer: []const u8,
+};
+
+pub const ValidatorRegister = struct {
+    profile: ValidatorProfile,
+    unjailed: bool,
+    initial_wei: u64,
+};
+
+pub fn packActionCValidatorRegister(
+    p: *msgpack.Packer,
+    profile: ValidatorProfile,
+    unjailed: bool,
+    initial_wei: u64,
+) msgpack.PackError!void {
+    try p.packMapHeader(2);
+    try p.packStr("type");
+    try p.packStr("CValidatorAction");
+    try p.packStr("register");
+    try p.packMapHeader(3);
+    try p.packStr("profile");
+    try p.packMapHeader(6);
+    try p.packStr("node_ip");
+    try p.packMapHeader(1);
+    try p.packStr("Ip");
+    try p.packStr(profile.node_ip);
+    try p.packStr("name");
+    try p.packStr(profile.name);
+    try p.packStr("description");
+    try p.packStr(profile.description);
+    try p.packStr("delegations_disabled");
+    try p.packBool(profile.delegations_disabled);
+    try p.packStr("commission_bps");
+    try p.packUint(@intCast(profile.commission_bps));
+    try p.packStr("signer");
+    try p.packStr(profile.signer);
+    try p.packStr("unjailed");
+    try p.packBool(unjailed);
+    try p.packStr("initial_wei");
+    try p.packUint(initial_wei);
+}
+
+pub const ValidatorProfileChange = struct {
+    node_ip: ?[]const u8,
+    name: ?[]const u8,
+    description: ?[]const u8,
+    unjailed: bool,
+    disable_delegations: ?bool,
+    commission_bps: ?u32,
+    signer: ?[]const u8,
+};
+
+pub fn packActionCValidatorChangeProfile(p: *msgpack.Packer, c: ValidatorProfileChange) msgpack.PackError!void {
+    try p.packMapHeader(2);
+    try p.packStr("type");
+    try p.packStr("CValidatorAction");
+    try p.packStr("changeProfile");
+    try p.packMapHeader(7);
+    try p.packStr("node_ip");
+    if (c.node_ip) |ip| {
+        try p.packMapHeader(1);
+        try p.packStr("Ip");
+        try p.packStr(ip);
+    } else {
+        try p.packNil();
+    }
+    try p.packStr("name");
+    if (c.name) |n| { try p.packStr(n); } else { try p.packNil(); }
+    try p.packStr("description");
+    if (c.description) |d| { try p.packStr(d); } else { try p.packNil(); }
+    try p.packStr("unjailed");
+    try p.packBool(c.unjailed);
+    try p.packStr("disable_delegations");
+    if (c.disable_delegations) |dd| { try p.packBool(dd); } else { try p.packNil(); }
+    try p.packStr("commission_bps");
+    if (c.commission_bps) |cb| { try p.packUint(@intCast(cb)); } else { try p.packNil(); }
+    try p.packStr("signer");
+    if (c.signer) |s| { try p.packStr(s); } else { try p.packNil(); }
+}
+
+pub fn packActionCValidatorUnregister(p: *msgpack.Packer) msgpack.PackError!void {
+    try p.packMapHeader(2);
+    try p.packStr("type");
+    try p.packStr("CValidatorAction");
+    try p.packStr("unregister");
+    try p.packNil();
+}
+
+
+test "packActionSpotDeployTokenAction: enableFreezePrivilege" {
+    var buf: [256]u8 = undefined;
+    var p = msgpack.Packer.init(&buf);
+    try packActionSpotDeployTokenAction(&p, "enableFreezePrivilege", 42);
+    const written = p.written();
+    // Must start with map header for 2 fields
+    try std.testing.expectEqual(@as(u8, 0x82), written[0]);
+    // Contains "spotDeploy" as the type
+    try std.testing.expect(std.mem.indexOf(u8, written, "spotDeploy") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "enableFreezePrivilege") != null);
+}
+
+test "packActionCSignerJailSelf: structure" {
+    var buf: [128]u8 = undefined;
+    var p = msgpack.Packer.init(&buf);
+    try packActionCSignerJailSelf(&p);
+    const written = p.written();
+    try std.testing.expectEqual(@as(u8, 0x82), written[0]); // map of 2
+    try std.testing.expect(std.mem.indexOf(u8, written, "CSignerAction") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "jailSelf") != null);
+}
+
+test "packActionCValidatorUnregister: structure" {
+    var buf: [128]u8 = undefined;
+    var p = msgpack.Packer.init(&buf);
+    try packActionCValidatorUnregister(&p);
+    const written = p.written();
+    try std.testing.expectEqual(@as(u8, 0x82), written[0]); // map of 2
+    try std.testing.expect(std.mem.indexOf(u8, written, "CValidatorAction") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "unregister") != null);
+}
+
+test "packActionSpotDeployRegisterSpot: structure" {
+    var buf: [256]u8 = undefined;
+    var p = msgpack.Packer.init(&buf);
+    try packActionSpotDeployRegisterSpot(&p, .{ .base_token = 1, .quote_token = 0 });
+    const written = p.written();
+    try std.testing.expect(std.mem.indexOf(u8, written, "spotDeploy") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "registerSpot") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "tokens") != null);
+}
+
+test "packActionTwapOrder: structure" {
+    var buf: [256]u8 = undefined;
+    var p = msgpack.Packer.init(&buf);
+    try packActionTwapOrder(&p, .{
+        .asset = 0,
+        .is_buy = true,
+        .sz = Decimal.fromString("1.5") catch unreachable,
+        .reduce_only = false,
+        .duration_min = 60,
+        .randomize = true,
+    });
+    const written = p.written();
+    try std.testing.expectEqual(@as(u8, 0x82), written[0]); // outer map of 2: {type, twap}
+    try std.testing.expect(std.mem.indexOf(u8, written, "twapOrder") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "twap") != null);
+}
+
+test "packActionVaultTransfer: structure" {
+    var buf: [256]u8 = undefined;
+    var p = msgpack.Packer.init(&buf);
+    try packActionVaultTransfer(&p, .{
+        .vault_address = "0x1234567890abcdef1234567890abcdef12345678",
+        .is_deposit = true,
+        .usd = 100,
+    });
+    const written = p.written();
+    try std.testing.expectEqual(@as(u8, 0x84), written[0]); // map of 4
+    try std.testing.expect(std.mem.indexOf(u8, written, "vaultTransfer") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "isDeposit") != null);
+}
 
 test "cloidToHex: zero cloid" {
     const hex = cloidToHex(ZERO_CLOID);
