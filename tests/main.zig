@@ -171,11 +171,11 @@ test "cross-validation: Agent signature matches Rust" {
 test "cross-validation: UsdSend signature matches Rust" {
     const signer = try Signer.fromHex(TEST_PRIVATE_KEY);
 
-    // NOTE: destination must be lowercase (matching Rust's serialize_address_as_hex)
+    const dest = hexToBytes(20, "0d1d9635d0640821d15e323ac8adadfa9c111414");
     const sig = try eip712.signUsdSend(
         signer,
         true,
-        "0x0d1d9635d0640821d15e323ac8adadfa9c111414",
+        dest,
         "1",
         1690393044548,
     );

@@ -1,0 +1,143 @@
+{
+  "signer_address": "0xcD49bbAc6E85fdEB167EB7cA41A945d2b8758F6F",
+  "private_key": "0xe908f86dbb4d55ac876378565aafeabc187f6690f046459397b17d9b9a19688e",
+  "vectors": [
+    {
+      "name": "UsdSend",
+      "message": {
+        "hyperliquidChain": "Mainnet",
+        "destination": "0x0000000000000000000000000000000000000001",
+        "amount": "100.0",
+        "time": 1700000000000
+      },
+      "signature": {
+        "r": "0x781c38d97da01f6a223d9a9198776649b43489c7d3ce3c5624d06e0f587b3d72",
+        "s": "0x37ab5d1e4213d1eb98bcab158570da660f9436ad2ed4ef1bb02009fa77189e5d",
+        "v": 27,
+        "signature": "781c38d97da01f6a223d9a9198776649b43489c7d3ce3c5624d06e0f587b3d7237ab5d1e4213d1eb98bcab158570da660f9436ad2ed4ef1bb02009fa77189e5d1b"
+      }
+    },
+    {
+      "name": "Withdraw",
+      "message": {
+        "hyperliquidChain": "Mainnet",
+        "destination": "0x0000000000000000000000000000000000000001",
+        "amount": "50.0",
+        "time": 1700000000000
+      },
+      "signature": {
+        "r": "0xf6c89c11f24074179a5f82d9c93db1b4d50fc63ad4f2a32d088883d7c6e9dc2b",
+        "s": "0x1e97538fc6c6abe4bdfbbb78f6318c82d9747c5ae8eecde884a59012301bb26c",
+        "v": 28,
+        "signature": "f6c89c11f24074179a5f82d9c93db1b4d50fc63ad4f2a32d088883d7c6e9dc2b1e97538fc6c6abe4bdfbbb78f6318c82d9747c5ae8eecde884a59012301bb26c1c"
+      }
+    },
+    {
+      "name": "UsdClassTransfer",
+      "message": {
+        "hyperliquidChain": "Mainnet",
+        "amount": "1000.0",
+        "toPerp": true,
+        "nonce": 1700000000000
+      },
+      "signature": {
+        "r": "0x3b404cb12be6e4a7c5c1e14edc093496dc5783525fb65d698b4ae596a6bbd274",
+        "s": "0x3f9ccd30c7869d0ab45ce73759ac19fe95633b8741b3c869d84ed5c320ad6c25",
+        "v": 28,
+        "signature": "3b404cb12be6e4a7c5c1e14edc093496dc5783525fb65d698b4ae596a6bbd2743f9ccd30c7869d0ab45ce73759ac19fe95633b8741b3c869d84ed5c320ad6c251c"
+      }
+    },
+    {
+      "name": "TokenDelegate",
+      "message": {
+        "hyperliquidChain": "Mainnet",
+        "validator": "0x0000000000000000000000000000000000000002",
+        "wei": 1000000000000000000,
+        "isUndelegate": false,
+        "nonce": 1700000000000
+      },
+      "signature": {
+        "r": "0x54e19bc5c40de2fc0acddec5e4d4c6af6adcdab080eb814421588c0db67d5427",
+        "s": "0x662617758972aadd6ff2c99a2f26cfd058da5aff018ba89d5187e3b1977685e0",
+        "v": 27,
+        "signature": "54e19bc5c40de2fc0acddec5e4d4c6af6adcdab080eb814421588c0db67d5427662617758972aadd6ff2c99a2f26cfd058da5aff018ba89d5187e3b1977685e01b"
+      }
+    },
+    {
+      "name": "ApproveBuilderFee",
+      "message": {
+        "hyperliquidChain": "Mainnet",
+        "maxFeeRate": "0.001",
+        "builder": "0x0000000000000000000000000000000000000003",
+        "nonce": 1700000000000
+      },
+      "signature": {
+        "r": "0xa51af5fdb4c96ae617af813b2dd25622f7992223783624d3d53a23dbb7241a6d",
+        "s": "0x7e46324a3805e3de0b9195df8a676cce047ae9ebcadd179b8600acd6c8c6002f",
+        "v": 28,
+        "signature": "a51af5fdb4c96ae617af813b2dd25622f7992223783624d3d53a23dbb7241a6d7e46324a3805e3de0b9195df8a676cce047ae9ebcadd179b8600acd6c8c6002f1c"
+      }
+    },
+    {
+      "name": "ApproveAgent",
+      "message": {
+        "hyperliquidChain": "Mainnet",
+        "agentAddress": "0x0000000000000000000000000000000000000004",
+        "agentName": "test-agent",
+        "nonce": 1700000000000
+      },
+      "signature": {
+        "r": "0x6d8ec16448ec5b1bcf4a3c4a55422b17b517bd8e1b45de77341ac08ab5ab0350",
+        "s": "0x6c95e43d8181e2d6d8b18c1374b41fee2c008c917ab2c73bf3c0540555c5d28b",
+        "v": 27,
+        "signature": "6d8ec16448ec5b1bcf4a3c4a55422b17b517bd8e1b45de77341ac08ab5ab03506c95e43d8181e2d6d8b18c1374b41fee2c008c917ab2c73bf3c0540555c5d28b1b"
+      }
+    },
+    {
+      "name": "SpotSend",
+      "message": {
+        "hyperliquidChain": "Mainnet",
+        "destination": "0x0000000000000000000000000000000000000001",
+        "token": "PURR",
+        "amount": "100.0",
+        "time": 1700000000000
+      },
+      "signature": {
+        "r": "0x40ee8b3aa1e1d9ce2bbc568cd998dcffef77b1463a18c274b1eac65d0dfa8688",
+        "s": "0x18124f33c6362d72b50e4df95bfd14fa87ab5e38ffbaca73987d8d2695986015",
+        "v": 27,
+        "signature": "40ee8b3aa1e1d9ce2bbc568cd998dcffef77b1463a18c274b1eac65d0dfa868818124f33c6362d72b50e4df95bfd14fa87ab5e38ffbaca73987d8d26959860151b"
+      }
+    },
+    {
+      "name": "UserDexAbstraction",
+      "message": {
+        "hyperliquidChain": "Mainnet",
+        "user": "0x0000000000000000000000000000000000000005",
+        "enabled": true,
+        "nonce": 1700000000000
+      },
+      "signature": {
+        "r": "0x437a119020cfac8ab095ee82b75dfa9f8ea4af218781c421f3ba7c710dee0db",
+        "s": "0xd757ec7dd694bdb66f88902018a54cfe2b24cf434deb86d2f9f0f2d2656895",
+        "v": 27,
+        "signature": "0437a119020cfac8ab095ee82b75dfa9f8ea4af218781c421f3ba7c710dee0db00d757ec7dd694bdb66f88902018a54cfe2b24cf434deb86d2f9f0f2d26568951b"
+      }
+    },
+    {
+      "name": "UserSetAbstraction",
+      "message": {
+        "hyperliquidChain": "Mainnet",
+        "user": "0x0000000000000000000000000000000000000005",
+        "abstraction": "test-abstraction",
+        "nonce": 1700000000000
+      },
+      "signature": {
+        "r": "0x2c5314f0aa305f0671fdd5013e230d5355083be38210a73e46ac9736eebbb5fd",
+        "s": "0x34d7846c145cfc4207e8dbb5c0559ceae84806cfb1973d2cae7c05d834c05c0f",
+        "v": 27,
+        "signature": "2c5314f0aa305f0671fdd5013e230d5355083be38210a73e46ac9736eebbb5fd34d7846c145cfc4207e8dbb5c0559ceae84806cfb1973d2cae7c05d834c05c0f1b"
+      }
+    }
+  ]
+}
