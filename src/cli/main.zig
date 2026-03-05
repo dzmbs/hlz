@@ -57,6 +57,8 @@ pub fn main() !void {
 
     const cmd_name: []const u8 = switch (cmd) {
         .approve_agent => "approve-agent",
+        .rate_limit => "rate-limit",
+        .approve_builder => "approve-builder",
         else => @tagName(cmd),
     };
     if (w.format == .json) {
@@ -94,6 +96,16 @@ pub fn main() !void {
         .referral => |a| commands.referralCmd(allocator, &w, config, a) catch |e| return exit(&w, "referral", e),
         .twap => |a| commands.twap(allocator, &w, config, a) catch |e| return exit(&w, "twap", e),
         .batch => |a| commands.batchCmd(allocator, &w, config, a) catch |e| return exit(&w, "batch", e),
+        .withdraw => |a| commands.withdrawCmd(allocator, &w, config, a) catch |e| return exit(&w, "withdraw", e),
+        .transfer => |a| commands.transferCmd(allocator, &w, config, a) catch |e| return exit(&w, "transfer", e),
+        .fees => |a| commands.feesCmd(allocator, &w, config, a) catch |e| return exit(&w, "fees", e),
+        .rate_limit => |a| commands.rateLimitCmd(allocator, &w, config, a) catch |e| return exit(&w, "rate-limit", e),
+        .stake => |a| commands.stakeCmd(allocator, &w, config, a) catch |e| return exit(&w, "stake", e),
+        .vault => |a| commands.vaultCmd(allocator, &w, config, a) catch |e| return exit(&w, "vault", e),
+        .ledger => |a| commands.ledgerCmd(allocator, &w, config, a) catch |e| return exit(&w, "ledger", e),
+        .approve_builder => |a| commands.approveBuilderCmd(allocator, &w, config, a) catch |e| return exit(&w, "approve-builder", e),
+        .subaccount => |a| commands.subaccountCmd(allocator, &w, config, a) catch |e| return exit(&w, "subaccount", e),
+        .account => |a| commands.accountCmd(allocator, &w, config, a) catch |e| return exit(&w, "account", e),
         .trade => |a| trade_mod.run(allocator, .{
             .chain = config.chain,
             .key_hex = config.key_hex,
@@ -241,7 +253,7 @@ fn printHelp(w: *output_mod.Writer) !void {
         \\  portfolio [ADDR]         Positions + spot balances
         \\  positions [ADDR]         Open positions
         \\  orders [ADDR]            Open orders
-        \\  fills [ADDR]             Recent fills
+        \\  fills [ADDR] [--from T]  Recent fills (optionally by time)
         \\  balance [ADDR]           Account balance + health
         \\  status <OID>             Order status by OID
         \\  referral [set <CODE>]    Referral status or set code
@@ -277,10 +289,16 @@ fn printHelp(w: *output_mod.Writer) !void {
         \\
     , .{});
 
-    try w.styled(Style.bold_white, "TRANSFERS\n");
+    try w.styled(Style.bold_white, "TRANSFERS & ACCOUNT\n");
     try w.print(
         \\  send <AMT> [TOKEN] <DEST>      Send to address
         \\  send <AMT> USDC --to spot      Perp → spot transfer
+        \\  withdraw <AMT> [DEST]          Bridge withdrawal
+        \\  transfer <AMT> --to-spot       Move USDC from perp to spot
+        \\  transfer <AMT> --to-perp       Move USDC from spot to perp
+        \\  fees [ADDR]                    Fee rates
+        \\  rate-limit [ADDR]              Rate limit status
+        \\  ledger [ADDR] [--from T]       Non-funding ledger updates
         \\
         \\
     , .{});
@@ -292,9 +310,38 @@ fn printHelp(w: *output_mod.Writer) !void {
         \\
     , .{});
 
-    try w.styled(Style.bold_white, "AGENT\n");
+    try w.styled(Style.bold_white, "STAKING & VAULTS\n");
     try w.print(
+        \\  stake status             Delegation summary
+        \\  stake delegate <VALIDATOR> <WEI>    Delegate to validator
+        \\  stake undelegate <VALIDATOR> <WEI>  Undelegate
+        \\  stake rewards            Staking rewards
+        \\  stake history            Delegation history
+        \\  vault <ADDR>             Vault details
+        \\  vault deposit <ADDR> <AMT>   Deposit to vault
+        \\  vault withdraw <ADDR> <AMT>  Withdraw from vault
+        \\
+        \\
+    , .{});
+
+    try w.styled(Style.bold_white, "SUB-ACCOUNTS\n");
+    try w.print(
+        \\  subaccount ls            List sub-accounts
+        \\  subaccount create <NAME> Create sub-account
+        \\  subaccount transfer <ADDR> <AMT>  USDC transfer
+        \\  subaccount transfer <ADDR> <AMT> --token <T>  Spot transfer
+        \\
+        \\
+    , .{});
+
+    try w.styled(Style.bold_white, "ACCOUNT MODE\n");
+    try w.print(
+        \\  account                  Show account abstraction mode help
+        \\  account standard         Separate spot/perp wallets (builders, MMs)
+        \\  account unified          Single balance, shared collateral (default)
+        \\  account portfolio        Portfolio margin (pre-alpha)
         \\  approve-agent <ADDR>     Approve API wallet for your account
+        \\  approve-builder <ADDR> <RATE>  Approve builder fee
         \\
         \\
     , .{});

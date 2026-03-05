@@ -10,7 +10,7 @@ pub const Command = union(enum) {
     mids: MidsArgs,
     positions: UserQuery,
     orders: UserQuery,
-    fills: UserQuery,
+    fills: FillsArgs,
     balance: UserQuery,
     perps: MarketArgs,
     spot: MarketArgs,
@@ -33,6 +33,16 @@ pub const Command = union(enum) {
     twap: TwapArgs,
     batch: BatchArgs,
     approve_agent: ApproveAgentArgs,
+    withdraw: WithdrawArgs,
+    transfer: TransferArgs,
+    fees: UserQuery,
+    rate_limit: UserQuery,
+    stake: StakeArgs,
+    vault: VaultArgs,
+    ledger: LedgerArgs,
+    approve_builder: ApproveBuilderArgs,
+    subaccount: SubAccountArgs,
+    account: AccountArgs,
     config: void,
     help: void,
     version: void,
@@ -178,6 +188,92 @@ pub const KeysArgs = struct {
 
 pub const KeysAction = enum { ls, new, import_, rm, export_, default };
 
+pub const FillsArgs = struct {
+    address: ?[]const u8 = null,
+    start_time: ?[]const u8 = null,
+    end_time: ?[]const u8 = null,
+};
+
+pub const WithdrawArgs = struct {
+    amount: []const u8,
+    destination: ?[]const u8 = null,
+};
+
+pub const TransferArgs = struct {
+    amount: []const u8,
+    direction: TransferDirection,
+};
+
+pub const TransferDirection = enum { to_spot, to_perp };
+
+pub const StakeArgs = struct {
+    action: StakeAction = .status,
+    validator: ?[]const u8 = null,
+    amount: ?[]const u8 = null,
+};
+
+pub const StakeAction = enum { status, delegate, undelegate, rewards, history };
+
+pub const VaultArgs = struct {
+    action: VaultAction = .info,
+    vault_address: ?[]const u8 = null,
+    amount: ?[]const u8 = null,
+};
+
+pub const VaultAction = enum { info, deposit, withdraw };
+
+pub const LedgerArgs = struct {
+    address: ?[]const u8 = null,
+    start_time: ?[]const u8 = null,
+    end_time: ?[]const u8 = null,
+};
+
+pub const ApproveBuilderArgs = struct {
+    builder: []const u8,
+    max_fee_rate: []const u8,
+};
+
+pub const SubAccountArgs = struct {
+    action: SubAccountAction = .list,
+    name: ?[]const u8 = null,
+    sub_address: ?[]const u8 = null,
+    amount: ?[]const u8 = null,
+    token: ?[]const u8 = null,
+    is_deposit: bool = true,
+};
+
+pub const SubAccountAction = enum { list, create, transfer, spot_transfer };
+
+pub const AccountArgs = struct {
+    mode: ?AccountMode = null, // null = show help / current info
+    invalid_mode: ?[]const u8 = null, // set when user typed unrecognized mode
+};
+
+/// Maps to Hyperliquid's abstraction modes.
+/// See: https://hyperliquid.gitbook.io/hyperliquid-docs/trading/account-abstraction-modes
+pub const AccountMode = enum {
+    standard,
+    unified,
+    portfolio,
+
+    /// Returns the API string value for userSetAbstraction.
+    pub fn toApiString(self: AccountMode) []const u8 {
+        return switch (self) {
+            .standard => "disabled",
+            .unified => "unifiedAccount",
+            .portfolio => "portfolioMargin",
+        };
+    }
+
+    pub fn displayName(self: AccountMode) []const u8 {
+        return switch (self) {
+            .standard => "standard",
+            .unified => "unified account",
+            .portfolio => "portfolio margin",
+        };
+    }
+};
+
 pub const ApproveAgentArgs = struct {
     agent_address: ?[]const u8 = null,
     agent_name: ?[]const u8 = null,
@@ -268,7 +364,7 @@ pub fn parse(allocator: std.mem.Allocator) ParseError!ParseResult {
     else if (std.mem.eql(u8, cmd_str, "orders") or std.mem.eql(u8, cmd_str, "ord"))
         .{ .orders = parseUserQuery(rest) }
     else if (std.mem.eql(u8, cmd_str, "fills"))
-        .{ .fills = parseUserQuery(rest) }
+        .{ .fills = parseFills(rest) }
     else if (std.mem.eql(u8, cmd_str, "balance") or std.mem.eql(u8, cmd_str, "bal"))
         .{ .balance = parseUserQuery(rest) }
     else if (std.mem.eql(u8, cmd_str, "perps"))
@@ -313,6 +409,26 @@ pub fn parse(allocator: std.mem.Allocator) ParseError!ParseResult {
         .{ .batch = parseBatch(rest) }
     else if (std.mem.eql(u8, cmd_str, "approve-agent") or std.mem.eql(u8, cmd_str, "approve"))
         .{ .approve_agent = parseApproveAgent(rest) }
+    else if (std.mem.eql(u8, cmd_str, "withdraw"))
+        .{ .withdraw = parseWithdraw(rest) orelse return error.MissingArgument }
+    else if (std.mem.eql(u8, cmd_str, "transfer"))
+        .{ .transfer = parseTransfer(rest) orelse return error.MissingArgument }
+    else if (std.mem.eql(u8, cmd_str, "fees") or std.mem.eql(u8, cmd_str, "fee"))
+        .{ .fees = parseUserQuery(rest) }
+    else if (std.mem.eql(u8, cmd_str, "rate-limit") or std.mem.eql(u8, cmd_str, "ratelimit"))
+        .{ .rate_limit = parseUserQuery(rest) }
+    else if (std.mem.eql(u8, cmd_str, "stake") or std.mem.eql(u8, cmd_str, "staking"))
+        .{ .stake = parseStake(rest) }
+    else if (std.mem.eql(u8, cmd_str, "vault"))
+        .{ .vault = parseVault(rest) }
+    else if (std.mem.eql(u8, cmd_str, "ledger"))
+        .{ .ledger = parseLedger(rest) }
+    else if (std.mem.eql(u8, cmd_str, "approve-builder"))
+        .{ .approve_builder = parseApproveBuilder(rest) orelse return error.MissingArgument }
+    else if (std.mem.eql(u8, cmd_str, "subaccount") or std.mem.eql(u8, cmd_str, "sub"))
+        .{ .subaccount = parseSubAccount(rest) }
+    else if (std.mem.eql(u8, cmd_str, "account"))
+        .{ .account = parseAccount(rest) }
     else if (std.mem.eql(u8, cmd_str, "config"))
         .{ .config = {} }
     else if (std.mem.eql(u8, cmd_str, "help") or std.mem.eql(u8, cmd_str, "--help") or std.mem.eql(u8, cmd_str, "-h"))
@@ -641,6 +757,160 @@ fn parseBatch(args: []const []const u8) BatchArgs {
         }
     }
     return result;
+}
+
+fn parseFills(args: []const []const u8) FillsArgs {
+    var result = FillsArgs{};
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        if (std.mem.eql(u8, args[i], "--from") and i + 1 < args.len) {
+            i += 1;
+            result.start_time = args[i];
+        } else if (std.mem.eql(u8, args[i], "--to") and i + 1 < args.len) {
+            i += 1;
+            result.end_time = args[i];
+        } else {
+            result.address = args[i];
+        }
+    }
+    return result;
+}
+
+// withdraw 100 0xdest  or  withdraw 100 (to self)
+fn parseWithdraw(args: []const []const u8) ?WithdrawArgs {
+    if (args.len < 1) return null;
+    var result = WithdrawArgs{ .amount = args[0] };
+    if (args.len >= 2) result.destination = args[1];
+    return result;
+}
+
+// transfer 100 --to-spot  or  transfer 100 --to-perp
+// Direction flag is required — omitting it is an error to prevent accidental transfers.
+fn parseTransfer(args: []const []const u8) ?TransferArgs {
+    if (args.len < 2) return null; // need amount + direction flag
+    var direction: ?TransferDirection = null;
+    var i: usize = 1;
+    while (i < args.len) : (i += 1) {
+        if (std.mem.eql(u8, args[i], "--to-perp")) {
+            direction = .to_perp;
+        } else if (std.mem.eql(u8, args[i], "--to-spot")) {
+            direction = .to_spot;
+        }
+    }
+    return .{
+        .amount = args[0],
+        .direction = direction orelse return null, // missing flag → MissingArgument
+    };
+}
+
+// stake delegate 0xvalidator 1000   or  stake status  or  stake rewards
+fn parseStake(args: []const []const u8) StakeArgs {
+    var result = StakeArgs{};
+    if (args.len == 0) return result;
+
+    if (std.mem.eql(u8, args[0], "delegate")) {
+        result.action = .delegate;
+        if (args.len >= 2) result.validator = args[1];
+        if (args.len >= 3) result.amount = args[2];
+    } else if (std.mem.eql(u8, args[0], "undelegate")) {
+        result.action = .undelegate;
+        if (args.len >= 2) result.validator = args[1];
+        if (args.len >= 3) result.amount = args[2];
+    } else if (std.mem.eql(u8, args[0], "rewards")) {
+        result.action = .rewards;
+    } else if (std.mem.eql(u8, args[0], "history")) {
+        result.action = .history;
+    } else if (std.mem.eql(u8, args[0], "status")) {
+        result.action = .status;
+    }
+    return result;
+}
+
+// vault 0xaddr              → info
+// vault info 0xaddr         → info (explicit)
+// vault deposit 0xaddr 100  → deposit
+// vault withdraw 0xaddr 100 → withdraw
+fn parseVault(args: []const []const u8) VaultArgs {
+    var result = VaultArgs{};
+    if (args.len == 0) return result;
+
+    if (std.mem.eql(u8, args[0], "deposit")) {
+        result.action = .deposit;
+        if (args.len >= 2) result.vault_address = args[1];
+        if (args.len >= 3) result.amount = args[2];
+    } else if (std.mem.eql(u8, args[0], "withdraw")) {
+        result.action = .withdraw;
+        if (args.len >= 2) result.vault_address = args[1];
+        if (args.len >= 3) result.amount = args[2];
+    } else if (std.mem.eql(u8, args[0], "info")) {
+        // Explicit "vault info 0xaddr" form
+        if (args.len >= 2) result.vault_address = args[1];
+    } else {
+        // Bare "vault 0xaddr" form
+        result.vault_address = args[0];
+    }
+    return result;
+}
+
+fn parseLedger(args: []const []const u8) LedgerArgs {
+    var result = LedgerArgs{};
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        if (std.mem.eql(u8, args[i], "--from") and i + 1 < args.len) {
+            i += 1;
+            result.start_time = args[i];
+        } else if (std.mem.eql(u8, args[i], "--to") and i + 1 < args.len) {
+            i += 1;
+            result.end_time = args[i];
+        } else {
+            result.address = args[i];
+        }
+    }
+    return result;
+}
+
+// approve-builder 0xbuilder 0.001
+fn parseApproveBuilder(args: []const []const u8) ?ApproveBuilderArgs {
+    if (args.len < 2) return null;
+    return .{ .builder = args[0], .max_fee_rate = args[1] };
+}
+
+// subaccount list  or  subaccount create "my-sub"  or  subaccount transfer 0xsub 100
+fn parseSubAccount(args: []const []const u8) SubAccountArgs {
+    var result = SubAccountArgs{};
+    if (args.len == 0) return result;
+
+    if (std.mem.eql(u8, args[0], "create")) {
+        result.action = .create;
+        if (args.len >= 2) result.name = args[1];
+    } else if (std.mem.eql(u8, args[0], "transfer")) {
+        result.action = .transfer;
+        if (args.len >= 2) result.sub_address = args[1];
+        if (args.len >= 3) result.amount = args[2];
+        var i: usize = 3;
+        while (i < args.len) : (i += 1) {
+            if (std.mem.eql(u8, args[i], "--withdraw")) result.is_deposit = false;
+            if (std.mem.eql(u8, args[i], "--token") and i + 1 < args.len) {
+                i += 1;
+                result.token = args[i];
+                result.action = .spot_transfer;
+            }
+        }
+    } else if (std.mem.eql(u8, args[0], "list") or std.mem.eql(u8, args[0], "ls")) {
+        result.action = .list;
+    }
+    return result;
+}
+
+// account [standard|unified|portfolio]
+// account [standard|unified|portfolio]
+fn parseAccount(args: []const []const u8) AccountArgs {
+    if (args.len == 0) return .{};
+    const mode = std.meta.stringToEnum(AccountMode, args[0]);
+    return .{
+        .mode = mode,
+        .invalid_mode = if (mode == null) args[0] else null,
+    };
 }
 
 fn parseApproveAgent(args: []const []const u8) ApproveAgentArgs {

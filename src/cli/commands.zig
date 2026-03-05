@@ -361,7 +361,11 @@ pub fn approveAgent(allocator: std.mem.Allocator, w: *Writer, config: Config, a:
     var client = switch (config.chain) { .mainnet => Client.mainnet(allocator), .testnet => Client.testnet(allocator) };
     defer client.deinit();
     const nonce = @as(u64, @intCast(std.time.milliTimestamp()));
-    var result = client.approveAgent(auth.signer, agent_addr, a.agent_name, nonce) catch |e| {
+    const addr = Client.parseAddress(agent_addr) catch {
+        try w.err("invalid agent address");
+        return;
+    };
+    var result = client.approveAgent(auth.signer, addr, a.agent_name, nonce) catch |e| {
         return failFmt(w, "approve failed: {s}", .{@errorName(e)});
     };
     defer result.deinit();
@@ -735,11 +739,29 @@ pub fn orders(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_
     try w.footer();
 }
 
-pub fn fills(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_mod.UserQuery) !void {
+pub fn fills(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_mod.FillsArgs) !void {
     var client = makeClient(allocator, config);
     defer client.deinit();
 
     const addr = a.address orelse config.getAddress() orelse return error.MissingAddress;
+
+    // If time range specified, use userFillsByTime
+    if (a.start_time != null) {
+        const start = parseTimestampMs(a.start_time.?) orelse return error.Overflow;
+        const end = if (a.end_time) |et| parseTimestampMs(et) else null;
+
+        if (w.format == .json) {
+            var raw = try client.userFillsByTime(addr, start, end);
+            defer raw.deinit();
+            try w.jsonRaw(raw.body);
+            return;
+        }
+
+        var typed = try client.getUserFillsByTime(addr, start, end);
+        defer typed.deinit();
+
+        return renderFills(w, typed.value);
+    }
 
     if (w.format == .json) {
         var raw = try client.userFills(addr);
@@ -751,6 +773,10 @@ pub fn fills(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_m
     var typed = try client.getUserFills(addr);
     defer typed.deinit();
 
+    return renderFills(w, typed.value);
+}
+
+fn renderFills(w: *Writer, fill_slice: []const response.Fill) !void {
     try w.heading("RECENT FILLS");
     const hdr = [_]Column{
         .{ .text = "COIN", .width = 8 },
@@ -762,8 +788,8 @@ pub fn fills(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_m
     };
     try w.tableHeader(&hdr);
 
-    const limit = @min(typed.value.len, 20);
-    for (typed.value[0..limit]) |fill| {
+    const limit = @min(fill_slice.len, 20);
+    for (fill_slice[0..limit]) |fill| {
         var sz_buf: [32]u8 = undefined;
         var px_buf: [32]u8 = undefined;
         var fee_buf: [32]u8 = undefined;
@@ -1181,7 +1207,7 @@ pub fn placeOrder(allocator: std.mem.Allocator, w: *Writer, config: Config, a: a
 
     const auth = try getWriteAuth(w, config);
 
-    const resolved = try resolveAsset(allocator, &client, a.coin);
+    const resolved = try resolveAsset(&client, a.coin);
     const asset = resolved.index;
 
     const sz_raw = Decimal.fromString(a.size) catch return error.Overflow;
@@ -1437,7 +1463,7 @@ pub fn cancelOrder(allocator: std.mem.Allocator, w: *Writer, config: Config, a: 
     var nonce_handler = response.NonceHandler.init();
 
     if (a.all) {
-        var orders_typed = try client.getOpenOrders(auth.address(), "ALL_DEXS");
+        var orders_typed = try client.getOpenOrders(auth.address(), null);
         defer orders_typed.deinit();
 
         var cancels: [64]types.Cancel = undefined;
@@ -1453,7 +1479,7 @@ pub fn cancelOrder(allocator: std.mem.Allocator, w: *Writer, config: Config, a: 
                 for (asset_cache[0..asset_cache_len]) |entry| {
                     if (std.ascii.eqlIgnoreCase(entry.coin, order.coin)) break :blk entry.asset;
                 }
-                const resolved = (try resolveAsset(allocator, &client, order.coin)).index;
+                const resolved = (try resolveAsset(&client, order.coin)).index;
                 if (asset_cache_len < asset_cache.len) {
                     asset_cache[asset_cache_len] = .{ .coin = order.coin, .asset = resolved };
                     asset_cache_len += 1;
@@ -1517,8 +1543,8 @@ pub fn cancelOrder(allocator: std.mem.Allocator, w: *Writer, config: Config, a: 
     // cancel ETH (no OID, no CLOID) → cancel all orders for this coin
     if (a.oid == null and a.cloid == null) {
         const coin = a.coin orelse return error.MissingArgument;
-        const asset = (try resolveAsset(allocator, &client, coin)).index;
-        var orders_typed = try client.getOpenOrders(auth.address(), "ALL_DEXS");
+        const asset = (try resolveAsset(&client, coin)).index;
+        var orders_typed = try client.getOpenOrders(auth.address(), null);
         defer orders_typed.deinit();
 
         // Collect OIDs matching this coin
@@ -1564,7 +1590,7 @@ pub fn cancelOrder(allocator: std.mem.Allocator, w: *Writer, config: Config, a: 
 
     if (a.cloid) |cloid_hex| {
         const coin = a.coin orelse return error.MissingArgument;
-        const asset = (try resolveAsset(allocator, &client, coin)).index;
+        const asset = (try resolveAsset(&client, coin)).index;
         var cloid: types.Cloid = types.ZERO_CLOID;
         const hex_str = if (cloid_hex.len >= 2 and cloid_hex[0] == '0' and cloid_hex[1] == 'x') cloid_hex[2..] else cloid_hex;
         if (hex_str.len != 32) return error.InvalidArgument;
@@ -1599,12 +1625,12 @@ pub fn cancelOrder(allocator: std.mem.Allocator, w: *Writer, config: Config, a: 
     const oid_str = a.oid orelse return error.MissingArgument;
     const oid = std.fmt.parseInt(u64, oid_str, 10) catch return error.Overflow;
     const asset = if (a.coin) |coin|
-        (try resolveAsset(allocator, &client, coin)).index
+        (try resolveAsset(&client, coin)).index
     else blk: {
-        var orders_typed = try client.getOpenOrders(auth.address(), "ALL_DEXS");
+        var orders_typed = try client.getOpenOrders(auth.address(), null);
         defer orders_typed.deinit();
         for (orders_typed.value) |order| {
-            if (order.oid == oid) break :blk (try resolveAsset(allocator, &client, order.coin)).index;
+            if (order.oid == oid) break :blk (try resolveAsset(&client, order.coin)).index;
         }
         return failFmt(w, "order {d} not found in open orders", .{oid});
     };
@@ -1657,7 +1683,11 @@ pub fn sendAsset(allocator: std.mem.Allocator, w: *Writer, config: Config, a: ar
     const is_usdc = std.ascii.eqlIgnoreCase(a.token, "USDC");
     const is_simple = is_usdc and std.mem.eql(u8, a.from, "perp") and std.mem.eql(u8, a.to, "perp") and a.subaccount == null;
 
-    const dest = a.destination orelse auth.address();
+    const dest_str = a.destination orelse auth.address();
+    const dest = Client.parseAddress(dest_str) catch {
+        try w.err("invalid destination address");
+        return;
+    };
 
     if (is_simple) {
         var result = try client.sendUsdc(auth.signer, dest, a.amount, now);
@@ -1671,7 +1701,7 @@ pub fn sendAsset(allocator: std.mem.Allocator, w: *Writer, config: Config, a: ar
         const ok = try result.isOk();
         if (ok) {
             try w.success("Sent ");
-            try w.print("{s} USDC \xe2\x86\x92 {s}\n", .{ a.amount, dest });
+            try w.print("{s} USDC \xe2\x86\x92 {s}\n", .{ a.amount, dest_str });
         } else {
             try w.fail("send failed");
             try w.print("{s}\n", .{result.body});
@@ -1695,7 +1725,7 @@ pub fn sendAsset(allocator: std.mem.Allocator, w: *Writer, config: Config, a: ar
             try w.success("Sent ");
             const from_label = if (source_dex.len == 0) "perp" else source_dex;
             const to_label = if (dest_dex.len == 0) "perp" else dest_dex;
-            try w.print("{s} {s} ({s} \xe2\x86\x92 {s}) \xe2\x86\x92 {s}\n", .{ a.amount, a.token, from_label, to_label, dest });
+            try w.print("{s} {s} ({s} \xe2\x86\x92 {s}) \xe2\x86\x92 {s}\n", .{ a.amount, a.token, from_label, to_label, dest_str });
         } else {
             try w.fail("send failed");
             try w.print("{s}\n", .{result.body});
@@ -1712,10 +1742,21 @@ pub fn modifyOrder(allocator: std.mem.Allocator, w: *Writer, config: Config, a: 
     var nonce_handler = response.NonceHandler.init();
     const nonce = nonce_handler.next();
 
-    const asset = (try resolveAsset(allocator, &client, a.coin)).index;
+    const asset = (try resolveAsset(&client, a.coin)).index;
     const oid = std.fmt.parseInt(u64, a.oid, 10) catch return error.Overflow;
     const sz = Decimal.fromString(a.size) catch return error.Overflow;
     const px = Decimal.fromString(a.price) catch return error.Overflow;
+
+    const now: u64 = @intCast(std.time.milliTimestamp());
+    var cloid = types.ZERO_CLOID;
+    cloid[0] = @intCast((now >> 56) & 0xff);
+    cloid[1] = @intCast((now >> 48) & 0xff);
+    cloid[2] = @intCast((now >> 40) & 0xff);
+    cloid[3] = @intCast((now >> 32) & 0xff);
+    cloid[4] = @intCast((now >> 24) & 0xff);
+    cloid[5] = @intCast((now >> 16) & 0xff);
+    cloid[6] = @intCast((now >> 8) & 0xff);
+    cloid[7] = @intCast(now & 0xff);
 
     const modify_req = types.Modify{
         .oid = .{ .oid = oid },
@@ -1726,7 +1767,7 @@ pub fn modifyOrder(allocator: std.mem.Allocator, w: *Writer, config: Config, a: 
             .sz = sz,
             .reduce_only = false,
             .order_type = .{ .limit = .{ .tif = .Gtc } },
-            .cloid = types.ZERO_CLOID,
+            .cloid = cloid,
         },
     };
     const batch = types.BatchModify{
@@ -2540,7 +2581,7 @@ const ResolvedAsset = struct {
 };
 
 /// Resolve asset name to index and sz_decimals.
-fn resolveAsset(_: std.mem.Allocator, client: *Client, coin: []const u8) !ResolvedAsset {
+fn resolveAsset(client: *Client, coin: []const u8) !ResolvedAsset {
     if (std.fmt.parseInt(usize, coin, 10) catch null) |idx|
         return .{ .index = idx, .sz_decimals = -1 };
 
@@ -3226,7 +3267,7 @@ pub fn setLeverage(allocator: std.mem.Allocator, w: *Writer, config: Config, a: 
     var client = makeClient(allocator, config);
     defer client.deinit();
 
-    const asset = (try resolveAsset(allocator, &client, a.coin)).index;
+    const asset = (try resolveAsset(&client, a.coin)).index;
 
     // If no leverage value, just show current leverage info
     if (a.leverage == null) {
@@ -3525,7 +3566,7 @@ pub fn twap(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_mo
     defer client.deinit();
 
     const auth = try getWriteAuth(w, config);
-    const resolved = try resolveAsset(allocator, &client, a.coin);
+    const resolved = try resolveAsset(&client, a.coin);
     const asset = resolved.index;
     const total_sz = std.fmt.parseFloat(f64, a.size) catch return error.Overflow;
     const is_buy = std.mem.eql(u8, a.side, "buy") or std.mem.eql(u8, a.side, "long");
@@ -3789,7 +3830,7 @@ pub fn batchCmd(allocator: std.mem.Allocator, w: *Writer, config: Config, a: arg
         const size_str = tokens[2];
         const is_buy = std.mem.eql(u8, side_str, "buy") or std.mem.eql(u8, side_str, "long");
 
-        const resolved_asset = resolveAsset(allocator, &client, coin) catch {
+        const resolved_asset = resolveAsset(&client, coin) catch {
             try w.errFmt("order {d}: unknown asset {s}", .{ i + 1, coin });
             continue;
         };
@@ -3903,5 +3944,552 @@ pub fn batchCmd(allocator: std.mem.Allocator, w: *Writer, config: Config, a: arg
             },
             .unknown => return fail(w, "unknown response"),
         }
+    }
+}
+
+// ── Account & Transfer Commands ───────────────────────────────
+
+/// Parse a timestamp from user input (seconds or milliseconds).
+fn parseTimestampMs(s: []const u8) ?u64 {
+    const v = std.fmt.parseInt(u64, s, 10) catch return null;
+    // If value < 2^40, assume seconds and convert to ms
+    if (v < 1_099_511_627_776) return v * 1000;
+    return v;
+}
+
+pub fn withdrawCmd(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_mod.WithdrawArgs) !void {
+    var client = makeClient(allocator, config);
+    defer client.deinit();
+
+    const auth = try getWriteAuth(w, config);
+    const now: u64 = @intCast(std.time.milliTimestamp());
+    const dest_str = a.destination orelse auth.address();
+    const dest = Client.parseAddress(dest_str) catch {
+        try w.err("invalid destination address");
+        return;
+    };
+
+    var result = try client.withdraw(auth.signer, dest, a.amount, now);
+    defer result.deinit();
+
+    if (w.format == .json) {
+        try w.jsonRaw(result.body);
+        return;
+    }
+
+    const ok = try result.isOk();
+    if (ok) {
+        try w.success("Withdrawal initiated ");
+        try w.print("{s} USDC \xe2\x86\x92 {s}\n", .{ a.amount, dest_str });
+    } else {
+        try w.fail("withdrawal failed");
+        try w.print("{s}\n", .{result.body});
+        return error.CommandFailed;
+    }
+}
+
+pub fn transferCmd(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_mod.TransferArgs) !void {
+    var client = makeClient(allocator, config);
+    defer client.deinit();
+
+    const auth = try getWriteAuth(w, config);
+    var nonce_handler = response.NonceHandler.init();
+    const nonce = nonce_handler.next();
+
+    const to_perp = a.direction == .to_perp;
+
+    var result = try client.usdClassTransfer(auth.signer, a.amount, to_perp, nonce);
+    defer result.deinit();
+
+    if (w.format == .json) {
+        try w.jsonRaw(result.body);
+        return;
+    }
+
+    const ok = try result.isOk();
+    if (ok) {
+        const label = if (to_perp) "spot \xe2\x86\x92 perp" else "perp \xe2\x86\x92 spot";
+        try w.success("Transferred ");
+        try w.print("{s} USDC ({s})\n", .{ a.amount, label });
+    } else {
+        try w.fail("transfer failed");
+        try w.print("{s}\n", .{result.body});
+        return error.CommandFailed;
+    }
+}
+
+pub fn feesCmd(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_mod.UserQuery) !void {
+    var client = makeClient(allocator, config);
+    defer client.deinit();
+
+    const addr = a.address orelse config.getAddress() orelse return error.MissingAddress;
+
+    if (w.format == .json) {
+        var raw = try client.userFees(addr);
+        defer raw.deinit();
+        try w.jsonRaw(raw.body);
+        return;
+    }
+
+    var typed = try client.getUserFees(addr);
+    defer typed.deinit();
+    const fees = typed.value;
+
+    try w.heading("FEE RATES");
+    var add_buf: [32]u8 = undefined;
+    var cross_buf: [32]u8 = undefined;
+    try w.kv("Maker rate", decStr(fees.userAddRate, &add_buf));
+    try w.kv("Taker rate", decStr(fees.userCrossRate, &cross_buf));
+    if (fees.activeReferralDiscount) |d| {
+        var disc_buf: [32]u8 = undefined;
+        try w.kv("Referral discount", decFmt(d, &disc_buf));
+    }
+    try w.footer();
+}
+
+pub fn rateLimitCmd(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_mod.UserQuery) !void {
+    var client = makeClient(allocator, config);
+    defer client.deinit();
+
+    const addr = a.address orelse config.getAddress() orelse return error.MissingAddress;
+
+    if (w.format == .json) {
+        var raw = try client.userRateLimit(addr);
+        defer raw.deinit();
+        try w.jsonRaw(raw.body);
+        return;
+    }
+
+    var typed = try client.getUserRateLimit(addr);
+    defer typed.deinit();
+    const rl = typed.value;
+
+    try w.heading("RATE LIMIT");
+    var vlm_buf: [32]u8 = undefined;
+    try w.kv("Cumulative volume", decStr(rl.cumVlm, &vlm_buf));
+
+    if (rl.nRequestsUsed) |used| {
+        var used_buf: [20]u8 = undefined;
+        const used_str = std.fmt.bufPrint(&used_buf, "{d}", .{used}) catch "-";
+        try w.kv("Requests used", used_str);
+    }
+    if (rl.nRequestsCap) |cap| {
+        var cap_buf: [20]u8 = undefined;
+        const cap_str = std.fmt.bufPrint(&cap_buf, "{d}", .{cap}) catch "-";
+        try w.kv("Requests cap", cap_str);
+    }
+    try w.footer();
+}
+
+pub fn stakeCmd(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_mod.StakeArgs) !void {
+    var client = makeClient(allocator, config);
+    defer client.deinit();
+
+    switch (a.action) {
+        .status => {
+            const addr = config.getAddress() orelse return error.MissingAddress;
+            if (w.format == .json) {
+                var raw = try client.delegatorSummary(addr);
+                defer raw.deinit();
+                try w.jsonRaw(raw.body);
+                return;
+            }
+            // Pretty output — just forward raw JSON for now (complex nested structure)
+            var raw = try client.delegatorSummary(addr);
+            defer raw.deinit();
+            try w.heading("STAKING SUMMARY");
+            try w.print("{s}\n", .{raw.body});
+        },
+        .delegate, .undelegate => {
+            const validator = a.validator orelse return error.Overflow;
+            const amount_str = a.amount orelse return error.Overflow;
+            const auth = try getWriteAuth(w, config);
+            var nonce_handler = response.NonceHandler.init();
+            const nonce = nonce_handler.next();
+
+            // Convert amount to wei (amount * 1e18) — for now, pass as integer directly
+            const wei = std.fmt.parseInt(u64, amount_str, 10) catch return error.Overflow;
+            const is_undelegate = a.action == .undelegate;
+
+            const val_addr = Client.parseAddress(validator) catch {
+                try w.err("invalid validator address");
+                return;
+            };
+            var result = try client.tokenDelegate(auth.signer, val_addr, wei, is_undelegate, nonce);
+            defer result.deinit();
+
+            if (w.format == .json) {
+                try w.jsonRaw(result.body);
+                return;
+            }
+
+            const ok = try result.isOk();
+            if (ok) {
+                const verb: []const u8 = if (is_undelegate) "Undelegated" else "Delegated";
+                try w.success(verb);
+                try w.print(" {s} wei to {s}\n", .{ amount_str, validator });
+            } else {
+                try w.fail(if (is_undelegate) "undelegate failed" else "delegate failed");
+                try w.print("{s}\n", .{result.body});
+                return error.CommandFailed;
+            }
+        },
+        .rewards => {
+            const addr = config.getAddress() orelse return error.MissingAddress;
+            var raw = try client.delegatorRewards(addr);
+            defer raw.deinit();
+            if (w.format == .json) {
+                try w.jsonRaw(raw.body);
+            } else {
+                try w.heading("STAKING REWARDS");
+                try w.print("{s}\n", .{raw.body});
+            }
+        },
+        .history => {
+            const addr = config.getAddress() orelse return error.MissingAddress;
+            var raw = try client.delegatorHistory(addr);
+            defer raw.deinit();
+            if (w.format == .json) {
+                try w.jsonRaw(raw.body);
+            } else {
+                try w.heading("DELEGATION HISTORY");
+                try w.print("{s}\n", .{raw.body});
+            }
+        },
+    }
+}
+
+pub fn vaultCmd(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_mod.VaultArgs) !void {
+    var client = makeClient(allocator, config);
+    defer client.deinit();
+
+    switch (a.action) {
+        .info => {
+            const vault_addr = a.vault_address orelse return error.Overflow;
+            if (w.format == .json) {
+                var raw = try client.vaultDetails(vault_addr, config.getAddress());
+                defer raw.deinit();
+                try w.jsonRaw(raw.body);
+            } else {
+                var raw = try client.vaultDetails(vault_addr, config.getAddress());
+                defer raw.deinit();
+                try w.heading("VAULT DETAILS");
+                try w.print("{s}\n", .{raw.body});
+            }
+        },
+        .deposit, .withdraw => {
+            const vault_addr = a.vault_address orelse return error.Overflow;
+            const amount = a.amount orelse return error.Overflow;
+            const auth = try getWriteAuth(w, config);
+            var nonce_handler = response.NonceHandler.init();
+            const nonce = nonce_handler.next();
+
+            const usd = std.fmt.parseInt(u64, amount, 10) catch {
+                try w.err("invalid amount (must be integer)");
+                return;
+            };
+            const vt = types.VaultTransfer{
+                .vault_address = vault_addr,
+                .is_deposit = a.action == .deposit,
+                .usd = usd,
+            };
+
+            var result = try client.vaultTransfer(auth.signer, vt, nonce, null, null);
+            defer result.deinit();
+
+            if (w.format == .json) {
+                try w.jsonRaw(result.body);
+                return;
+            }
+
+            const ok = try result.isOk();
+            if (ok) {
+                const verb: []const u8 = if (a.action == .deposit) "Deposited" else "Withdrew";
+                try w.success(verb);
+                try w.print(" {s} USDC {s} vault {s}\n", .{
+                    amount,
+                    if (a.action == .deposit) "into" else "from",
+                    vault_addr,
+                });
+            } else {
+                try w.fail("vault operation failed");
+                try w.print("{s}\n", .{result.body});
+                return error.CommandFailed;
+            }
+        },
+    }
+}
+
+pub fn ledgerCmd(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_mod.LedgerArgs) !void {
+    var client = makeClient(allocator, config);
+    defer client.deinit();
+
+    const addr = a.address orelse config.getAddress() orelse return error.MissingAddress;
+    const start = parseTimestampMs(a.start_time orelse "0") orelse 0;
+    const end = if (a.end_time) |et| parseTimestampMs(et) else null;
+
+    var raw = try client.userNonFundingLedgerUpdates(addr, start, end);
+    defer raw.deinit();
+
+    if (w.format == .json) {
+        try w.jsonRaw(raw.body);
+    } else {
+        try w.heading("LEDGER UPDATES");
+        try w.print("{s}\n", .{raw.body});
+    }
+}
+
+pub fn approveBuilderCmd(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_mod.ApproveBuilderArgs) !void {
+    var client = makeClient(allocator, config);
+    defer client.deinit();
+
+    const auth = try getWriteAuth(w, config);
+    var nonce_handler = response.NonceHandler.init();
+    const nonce = nonce_handler.next();
+
+    const builder_addr = Client.parseAddress(a.builder) catch {
+        try w.err("invalid builder address");
+        return;
+    };
+    var result = try client.approveBuilderFee(auth.signer, a.max_fee_rate, builder_addr, nonce);
+    defer result.deinit();
+
+    if (w.format == .json) {
+        try w.jsonRaw(result.body);
+        return;
+    }
+
+    const ok = try result.isOk();
+    if (ok) {
+        try w.success("Builder fee approved");
+        try w.print(" ({s} max fee for {s})\n", .{ a.max_fee_rate, a.builder });
+    } else {
+        try w.fail("approve-builder failed");
+        try w.print("{s}\n", .{result.body});
+        return error.CommandFailed;
+    }
+}
+
+/// Switch account abstraction mode (standard, unified, portfolio).
+///
+/// Modes control how spot and perp balances interact:
+/// - **standard**: Separate spot/perp wallets. Must `transfer --to-perp` to trade perps.
+///   Required for builder code addresses. No daily action limit.
+/// - **unified**: Single balance per asset. USDC is shared across all perps and spot.
+///   Default on app.hyperliquid.xyz. 50k actions/day limit.
+/// - **portfolio**: Most capital efficient. Unifies HYPE, BTC, USDH, USDC as collateral.
+///   Currently in pre-alpha. 50k actions/day limit.
+///
+/// With no argument, shows the current mode.
+/// See: https://hyperliquid.gitbook.io/hyperliquid-docs/trading/account-abstraction-modes
+pub fn accountCmd(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_mod.AccountArgs) !void {
+    var client = makeClient(allocator, config);
+    defer client.deinit();
+
+    if (a.invalid_mode) |bad| {
+        try w.failFmt("unknown account mode '{s}'. Use: standard, unified, portfolio", .{bad});
+        return error.CommandFailed;
+    }
+
+    const mode = a.mode orelse {
+        // No mode argument — query and display the current mode.
+        const addr = config.getAddress() orelse {
+            // No address available — just show help.
+            if (w.format == .json) {
+                try w.print("{{\"v\":1,\"status\":\"ok\",\"cmd\":\"account\",\"hint\":\"Provide --address or HL_KEY to query current mode, or use 'hlz account standard|unified|portfolio' to set.\"}}\n", .{});
+            } else {
+                try w.styled(Style.bold_white, "Account Abstraction Mode\n\n");
+                try w.print("  hlz account standard    Separate spot/perp wallets (builders, MMs)\n", .{});
+                try w.print("  hlz account unified     Single balance, shared collateral (default)\n", .{});
+                try w.print("  hlz account portfolio   Portfolio margin (pre-alpha)\n", .{});
+            }
+            return;
+        };
+        var result = try client.userAbstraction(addr);
+        defer result.deinit();
+
+        if (w.format == .json) {
+            try w.jsonRaw(result.body);
+            return;
+        }
+
+        // API returns a quoted string: "disabled", "unifiedAccount", or "portfolioMargin"
+        const body = result.body;
+        const display: []const u8 = if (std.mem.indexOf(u8, body, "disabled") != null)
+            "standard"
+        else if (std.mem.indexOf(u8, body, "unifiedAccount") != null)
+            "unified account"
+        else if (std.mem.indexOf(u8, body, "portfolioMargin") != null)
+            "portfolio margin"
+        else
+            body;
+
+        try w.styled(Style.bold_white, "Account mode: ");
+        try w.print("{s}\n", .{display});
+        return;
+    };
+
+    const auth = try getWriteAuth(w, config);
+    var nonce_handler = response.NonceHandler.init();
+    const nonce = nonce_handler.next();
+
+    const user_addr = auth.signer.address;
+    const api_value = mode.toApiString();
+
+    var result = try client.userSetAbstraction(auth.signer, user_addr, api_value, nonce);
+    defer result.deinit();
+
+    if (w.format == .json) {
+        try w.jsonRaw(result.body);
+        return;
+    }
+
+    const ok = try result.isOk();
+    if (ok) {
+        try w.success("Account mode set to ");
+        try w.styled(Style.bold_white, mode.displayName());
+        try w.print("\n", .{});
+    } else {
+        try w.fail("failed to set account mode");
+        try w.print("{s}\n", .{result.body});
+        return error.CommandFailed;
+    }
+}
+
+pub fn subaccountCmd(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_mod.SubAccountArgs) !void {
+    var client = makeClient(allocator, config);
+    defer client.deinit();
+
+    switch (a.action) {
+        .list => {
+            const addr = config.getAddress() orelse return error.MissingAddress;
+            if (w.format == .json) {
+                var raw = try client.subaccounts(addr);
+                defer raw.deinit();
+                try w.jsonRaw(raw.body);
+                return;
+            }
+
+            var typed = try client.getSubaccounts(addr);
+            defer typed.deinit();
+
+            try w.heading("SUB-ACCOUNTS");
+            const hdr = [_]Column{
+                .{ .text = "NAME", .width = 16 },
+                .{ .text = "ADDRESS", .width = 44 },
+            };
+            try w.tableHeader(&hdr);
+
+            for (typed.value) |sub| {
+                const cols = [_]Column{
+                    .{ .text = sub.name, .width = 16 },
+                    .{ .text = sub.subAccountUser, .width = 44, .color = Style.dim },
+                };
+                try w.tableRow(&cols);
+            }
+            try w.footer();
+        },
+        .create => {
+            const name = a.name orelse return error.Overflow;
+            const auth = try getWriteAuth(w, config);
+            var nonce_handler = response.NonceHandler.init();
+            const nonce = nonce_handler.next();
+
+            const csa = types.CreateSubAccount{ .name = name };
+            var result = try client.createSubAccount(auth.signer, csa, nonce, null, null);
+            defer result.deinit();
+
+            if (w.format == .json) {
+                try w.jsonRaw(result.body);
+                return;
+            }
+
+            const ok = try result.isOk();
+            if (ok) {
+                try w.success("Sub-account created: ");
+                try w.print("{s}\n", .{name});
+            } else {
+                try w.fail("create sub-account failed");
+                try w.print("{s}\n", .{result.body});
+                return error.CommandFailed;
+            }
+        },
+        .transfer => {
+            const sub_addr = a.sub_address orelse return error.Overflow;
+            const amount = a.amount orelse return error.Overflow;
+            const auth = try getWriteAuth(w, config);
+            var nonce_handler = response.NonceHandler.init();
+            const nonce = nonce_handler.next();
+
+            const usd = std.fmt.parseInt(u64, amount, 10) catch {
+                try w.err("invalid amount (must be integer)");
+                return;
+            };
+            const sat = types.SubAccountTransfer{
+                .sub_account_user = sub_addr,
+                .is_deposit = a.is_deposit,
+                .usd = usd,
+            };
+            var result = try client.subAccountTransfer(auth.signer, sat, nonce, null, null);
+            defer result.deinit();
+
+            if (w.format == .json) {
+                try w.jsonRaw(result.body);
+                return;
+            }
+
+            const ok = try result.isOk();
+            if (ok) {
+                const verb: []const u8 = if (a.is_deposit) "Deposited" else "Withdrew";
+                try w.success(verb);
+                try w.print(" {s} USDC {s} sub-account {s}\n", .{
+                    amount,
+                    if (a.is_deposit) "into" else "from",
+                    sub_addr,
+                });
+            } else {
+                try w.fail("sub-account transfer failed");
+                try w.print("{s}\n", .{result.body});
+                return error.CommandFailed;
+            }
+        },
+        .spot_transfer => {
+            const sub_addr = a.sub_address orelse return error.Overflow;
+            const amount = a.amount orelse return error.Overflow;
+            const token = a.token orelse return error.Overflow;
+            const auth = try getWriteAuth(w, config);
+            var nonce_handler = response.NonceHandler.init();
+            const nonce = nonce_handler.next();
+
+            const sst = types.SubAccountSpotTransfer{
+                .sub_account_user = sub_addr,
+                .is_deposit = a.is_deposit,
+                .token = token,
+                .amount = amount,
+            };
+            var result = try client.subAccountSpotTransfer(auth.signer, sst, nonce, null, null);
+            defer result.deinit();
+
+            if (w.format == .json) {
+                try w.jsonRaw(result.body);
+                return;
+            }
+
+            const ok = try result.isOk();
+            if (ok) {
+                const verb: []const u8 = if (a.is_deposit) "Deposited" else "Withdrew";
+                try w.success(verb);
+                try w.print(" {s} {s} {s} sub-account {s}\n", .{
+                    amount,
+                    token,
+                    if (a.is_deposit) "into" else "from",
+                    sub_addr,
+                });
+            } else {
+                try w.fail("sub-account spot transfer failed");
+                try w.print("{s}\n", .{result.body});
+                return error.CommandFailed;
+            }
+        },
     }
 }
