@@ -9,7 +9,7 @@ const commands = @import("commands.zig");
 const trade_mod = @import("trade");
 
 const Style = output_mod.Style;
-const VERSION = "0.5.2";
+const VERSION = "0.5.3";
 
 // Exit codes (documented in --help, stable contract)
 const EXIT_OK: u8 = 0;
@@ -409,7 +409,7 @@ fn printGlobalHelp(w: *output_mod.Writer) !void {
     try w.styled(Style.bold_white, "EXIT CODES\n");
     try w.print(
         \\  0   Success
-        \\  1   Error (check stderr or JSON error envelope)
+        \\  1   Error (check JSON error envelope on stdout with --json)
         \\  2   Usage error (bad arguments, unknown command)
         \\  3   Auth error (missing key or address)
         \\  4   Network error (connection failed, retryable)
