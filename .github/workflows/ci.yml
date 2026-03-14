@@ -1,0 +1,23 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+      - name: Unit tests
+        run: zig build test
+      - name: Build hlz
+        run: zig build hlz -Doptimize=ReleaseSmall
+      - name: Build hlz-terminal
+        run: zig build hlz-terminal -Doptimize=ReleaseSmall

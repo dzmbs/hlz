@@ -16,7 +16,7 @@ CLAUDE.md
 PLAN.md
 CONTEXT.md
 context7.json
-skills/
+/skills/
 .claude/
 
 # Reference repos (symlinks to local clones)
