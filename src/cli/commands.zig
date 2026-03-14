@@ -2767,14 +2767,20 @@ pub fn watch(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_m
     const is_above = a.above != null;
     const threshold_str = threshold_src;
 
-    // Uppercase the coin for matching against allMids keys
+    // Resolve coin name — spot pairs (e.g. HYPE/USDC) need @index for allMids
     var coin_buf: [16]u8 = undefined;
-    const coin = upperCoin(a.coin, &coin_buf);
+    var spot_idx_buf: [16]u8 = undefined;
+    const display_coin = upperCoin(a.coin, &coin_buf);
+    const is_spot = std.mem.indexOf(u8, a.coin, "/") != null;
+    const lookup_coin = if (is_spot)
+        resolveSpotCoin(allocator, config, display_coin, &spot_idx_buf)
+    else
+        display_coin;
 
     if (!is_json) {
         var msg_buf: [256]u8 = undefined;
         const msg = std.fmt.bufPrint(&msg_buf, "Watching {s} {s} {s}...\r\n", .{
-            coin,
+            display_coin,
             if (is_above) @as([]const u8, "--above") else @as([]const u8, "--below"),
             threshold_str,
         }) catch "Watching...\r\n";
@@ -2840,7 +2846,7 @@ pub fn watch(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_m
         }
         retries = 0;
 
-        const should_exit = watchReadLoop(allocator, conn, a, is_json, is_above, threshold, threshold_str, coin, stdout, stderr);
+        const should_exit = watchReadLoop(allocator, conn, a, is_json, is_above, threshold, threshold_str, display_coin, lookup_coin, stdout, stderr);
         conn.close();
 
         if (should_exit) return;
@@ -2859,6 +2865,9 @@ pub fn watch(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_m
 }
 
 /// Inner read loop for watch. Returns true when caller should exit.
+/// Uses edge detection: only triggers when condition transitions from
+/// not-met to met, preventing repeated firing while price stays on the
+/// same side of the threshold.
 fn watchReadLoop(
     allocator: std.mem.Allocator,
     conn: *WsConnection,
@@ -2867,10 +2876,15 @@ fn watchReadLoop(
     is_above: bool,
     threshold: f64,
     threshold_str: []const u8,
-    coin: []const u8,
+    display_coin: []const u8,
+    lookup_coin: []const u8,
     stdout: std.fs.File,
     stderr: std.fs.File,
 ) bool {
+    // Edge detection state: tracks whether the condition was met on the
+    // previous tick. We only fire when transitioning from false → true.
+    var was_met: bool = false;
+
     while (!stream_shutdown.load(.acquire)) {
         const event = conn.next() catch |e| {
             if (!is_json and !stream_shutdown.load(.acquire)) {
@@ -2891,13 +2905,21 @@ fn watchReadLoop(
             .message => |msg| {
                 if (msg.channel != .allMids) continue;
 
-                const price_str = extractMidPrice(msg.raw_json, coin) orelse continue;
+                const price_str = extractMidPrice(msg.raw_json, lookup_coin) orelse continue;
                 const mid_price = std.fmt.parseFloat(f64, price_str) catch continue;
 
-                const triggered = if (is_above) mid_price >= threshold else mid_price <= threshold;
-                if (!triggered) continue;
+                const is_met = if (is_above) mid_price >= threshold else mid_price <= threshold;
 
-                // --- Triggered ---
+                if (!is_met) {
+                    // Price moved back — re-arm for next crossing
+                    was_met = false;
+                    continue;
+                }
+
+                if (was_met) continue; // still on the triggered side, no edge
+                was_met = true;
+
+                // --- Edge triggered: condition just became true ---
                 const now: u64 = @intCast(std.time.milliTimestamp());
 
                 if (is_json) {
@@ -2905,7 +2927,7 @@ fn watchReadLoop(
                     const json_out = std.fmt.bufPrint(&json_buf,
                         \\{{"coin":"{s}","price":"{s}","condition":"{s}","threshold":"{s}","timestamp":{d}}}
                     , .{
-                        coin,
+                        display_coin,
                         price_str,
                         if (is_above) @as([]const u8, "above") else @as([]const u8, "below"),
                         threshold_str,
@@ -2916,7 +2938,7 @@ fn watchReadLoop(
                 } else {
                     var alert_buf: [256]u8 = undefined;
                     const alert = std.fmt.bufPrint(&alert_buf, "\xe2\x9a\xa1 {s} hit {s} (was watching: {s} {s})\r\n", .{
-                        coin,
+                        display_coin,
                         price_str,
                         if (is_above) @as([]const u8, "--above") else @as([]const u8, "--below"),
                         threshold_str,
