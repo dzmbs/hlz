@@ -11,6 +11,13 @@ docs/node_modules/
 docs/dist/
 docs/bun.lock
 
+# Local/reference worktrees and caches
+zig-pkg/
+hyperliquid-docs/
+log/
+WORKFLOW.md.bak
+.pi/git/
+
 # Internal
 CLAUDE.md
 PLAN.md
