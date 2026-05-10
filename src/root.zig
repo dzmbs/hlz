@@ -17,6 +17,7 @@ pub const crypto = struct {
     pub const field = @import("lib/crypto/field.zig");
     pub const point = @import("lib/crypto/point.zig");
 };
+pub const runtime = @import("lib/runtime.zig");
 
 // ── sdk/ — Hyperliquid client layer ──────────────────────────────
 pub const hypercore = struct {
@@ -37,6 +38,7 @@ test {
     _ = crypto.endo;
     _ = crypto.field;
     _ = crypto.point;
+    _ = runtime;
     _ = hypercore.types;
     _ = hypercore.signing;
     _ = hypercore.tick;
