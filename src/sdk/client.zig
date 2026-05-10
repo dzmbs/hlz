@@ -3,6 +3,7 @@
 const std = @import("std");
 const json_mod = @import("json.zig");
 const signing = @import("signing.zig");
+const runtime = @import("../lib/runtime.zig");
 const types = @import("types.zig");
 const resp_types = @import("response.zig");
 const signer_mod = @import("../lib/crypto/signer.zig");
@@ -51,7 +52,7 @@ pub const Client = struct {
     fn init(allocator: std.mem.Allocator, chain: Chain, base_url: []const u8) Client {
         return .{
             .allocator = allocator,
-            .http_client = std.http.Client{ .allocator = allocator },
+            .http_client = std.http.Client{ .allocator = allocator, .io = runtime.io() },
             .base_url = base_url,
             .chain = chain,
         };
@@ -301,10 +302,10 @@ pub const Client = struct {
     ) !ExchangeResult {
         const sig = try signing.signEvmUserModify(s, using_big_blocks, nonce, self.chain, vault_address, expires_after);
         var body_buf: [512]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&body_buf);
-        const w = fbs.writer();
+        var w_storage: std.Io.Writer = .fixed(&body_buf);
+        const w = &w_storage;
         const sig_json = sigJsonStr(sig);
-        try std.fmt.format(w, "{{\"action\":{{\"type\":\"evmUserModify\",\"usingBigBlocks\":{s}}},\"nonce\":{d},\"signature\":{s}", .{
+        try w.print("{{\"action\":{{\"type\":\"evmUserModify\",\"usingBigBlocks\":{s}}},\"nonce\":{d},\"signature\":{s}", .{
             if (using_big_blocks) "true" else "false",
             nonce,
             sigJsonSlice(&sig_json),
@@ -312,7 +313,7 @@ pub const Client = struct {
         try writeOptionalAddress(w, ",\"vaultAddress\":", vault_address);
         try writeOptionalU64(w, ",\"expiresAfter\":", expires_after);
         try w.writeAll("}");
-        return self.exchangeRequestDyn(fbs.getWritten());
+        return self.exchangeRequestDyn(w.buffered());
     }
 
     /// Invalidate a nonce (noop).
@@ -325,14 +326,14 @@ pub const Client = struct {
     ) !ExchangeResult {
         const sig = try signing.signNoop(s, nonce, self.chain, vault_address, expires_after);
         var body_buf: [512]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&body_buf);
-        const w = fbs.writer();
+        var w_storage: std.Io.Writer = .fixed(&body_buf);
+        const w = &w_storage;
         const sig_json = sigJsonStr(sig);
-        try std.fmt.format(w, "{{\"action\":{{\"type\":\"noop\"}},\"nonce\":{d},\"signature\":{s}", .{ nonce, sigJsonSlice(&sig_json) });
+        try w.print("{{\"action\":{{\"type\":\"noop\"}},\"nonce\":{d},\"signature\":{s}", .{ nonce, sigJsonSlice(&sig_json) });
         try writeOptionalAddress(w, ",\"vaultAddress\":", vault_address);
         try writeOptionalU64(w, ",\"expiresAfter\":", expires_after);
         try w.writeAll("}");
-        return self.exchangeRequestDyn(fbs.getWritten());
+        return self.exchangeRequestDyn(w.buffered());
     }
 
     /// Send USDC to another address.
@@ -931,14 +932,14 @@ pub const Client = struct {
     ) !ExchangeResult {
         const sig = try signing.signAgentEnableDexAbstraction(s, nonce, self.chain, vault_address, expires_after);
         var body_buf: [512]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&body_buf);
-        const w = fbs.writer();
+        var w_storage: std.Io.Writer = .fixed(&body_buf);
+        const w = &w_storage;
         const sig_json = sigJsonStr(sig);
-        try std.fmt.format(w, "{{\"action\":{{\"type\":\"agentEnableDexAbstraction\"}},\"nonce\":{d},\"signature\":{s}", .{ nonce, sigJsonSlice(&sig_json) });
+        try w.print("{{\"action\":{{\"type\":\"agentEnableDexAbstraction\"}},\"nonce\":{d},\"signature\":{s}", .{ nonce, sigJsonSlice(&sig_json) });
         try writeOptionalAddress(w, ",\"vaultAddress\":", vault_address);
         try writeOptionalU64(w, ",\"expiresAfter\":", expires_after);
         try w.writeAll("}");
-        return self.exchangeRequestDyn(fbs.getWritten());
+        return self.exchangeRequestDyn(w.buffered());
     }
 
     pub fn agentSetAbstraction(
@@ -951,14 +952,14 @@ pub const Client = struct {
     ) !ExchangeResult {
         const sig = try signing.signAgentSetAbstraction(s, abstraction_json, nonce, self.chain, vault_address, expires_after);
         var body_buf: [2048]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&body_buf);
-        const w = fbs.writer();
+        var w_storage: std.Io.Writer = .fixed(&body_buf);
+        const w = &w_storage;
         const sig_json = sigJsonStr(sig);
-        try std.fmt.format(w, "{{\"action\":{{\"type\":\"agentSetAbstraction\",\"abstraction\":\"{s}\"}},\"nonce\":{d},\"signature\":{s}", .{ abstraction_json, nonce, sigJsonSlice(&sig_json) });
+        try w.print("{{\"action\":{{\"type\":\"agentSetAbstraction\",\"abstraction\":\"{s}\"}},\"nonce\":{d},\"signature\":{s}", .{ abstraction_json, nonce, sigJsonSlice(&sig_json) });
         try writeOptionalAddress(w, ",\"vaultAddress\":", vault_address);
         try writeOptionalU64(w, ",\"expiresAfter\":", expires_after);
         try w.writeAll("}");
-        return self.exchangeRequestDyn(fbs.getWritten());
+        return self.exchangeRequestDyn(w.buffered());
     }
 
     pub fn userDexAbstraction(
@@ -975,9 +976,9 @@ pub const Client = struct {
         const body = std.fmt.bufPrint(&body_buf,
             \\{{"action":{{"type":"userDexAbstraction","signatureChainId":"{s}","hyperliquidChain":"{s}","user":"{s}","enabled":{s},"nonce":{d}}},"nonce":{d},"signature":{s},"vaultAddress":null,"expiresAfter":null}}
         , .{
-            self.chain.sigChainId(), chain_str, &user_hex,
-            if (enabled) "true" else "false",
-            nonce, nonce, sigJsonSlice(&sigJsonStr(sig)),
+            self.chain.sigChainId(),          chain_str, &user_hex,
+            if (enabled) "true" else "false", nonce,     nonce,
+            sigJsonSlice(&sigJsonStr(sig)),
         }) catch return error.BufferOverflow;
         return self.exchangeRequestDyn(body);
     }
@@ -996,8 +997,9 @@ pub const Client = struct {
         const body = std.fmt.bufPrint(&body_buf,
             \\{{"action":{{"type":"userSetAbstraction","signatureChainId":"{s}","hyperliquidChain":"{s}","user":"{s}","abstraction":"{s}","nonce":{d}}},"nonce":{d},"signature":{s},"vaultAddress":null,"expiresAfter":null}}
         , .{
-            self.chain.sigChainId(), chain_str, &user_hex,
-            abstraction, nonce, nonce, sigJsonSlice(&sigJsonStr(sig)),
+            self.chain.sigChainId(),        chain_str, &user_hex,
+            abstraction,                    nonce,     nonce,
+            sigJsonSlice(&sigJsonStr(sig)),
         }) catch return error.BufferOverflow;
         return self.exchangeRequestDyn(body);
     }
@@ -1070,22 +1072,22 @@ pub const Client = struct {
         var p = msgpack.Packer.init(&buf);
         try types.packActionSpotDeployUserGenesis(&p, ug);
         var json_buf: [8192]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&json_buf);
-        const w = fbs.writer();
+        var w_storage: std.Io.Writer = .fixed(&json_buf);
+        const w = &w_storage;
         try w.writeAll("{\"type\":\"spotDeploy\",\"userGenesis\":{\"token\":");
-        try std.fmt.format(w, "{d}", .{ug.token});
+        try w.print("{d}", .{ug.token});
         try w.writeAll(",\"userAndWei\":[");
         for (ug.user_and_wei, 0..) |pair, i| {
             if (i > 0) try w.writeAll(",");
-            try std.fmt.format(w, "[\"{s}\",\"{s}\"]", .{ pair[0], pair[1] });
+            try w.print("[\"{s}\",\"{s}\"]", .{ pair[0], pair[1] });
         }
         try w.writeAll("],\"existingTokenAndWei\":[");
         for (ug.existing_token_and_wei, 0..) |pair, i| {
             if (i > 0) try w.writeAll(",");
-            try std.fmt.format(w, "[{d},\"{s}\"]", .{ pair.token, pair.wei });
+            try w.print("[{d},\"{s}\"]", .{ pair.token, pair.wei });
         }
         try w.writeAll("]}}");
-        return self.sendSpotDeploy(s, p.written(), fbs.getWritten(), nonce);
+        return self.sendSpotDeploy(s, p.written(), w.buffered(), nonce);
     }
 
     pub fn spotDeployRegisterHyperliquidity(self: *Client, s: Signer, rh: types.SpotDeployRegisterHyperliquidity, nonce: u64) !ExchangeResult {
@@ -1093,14 +1095,14 @@ pub const Client = struct {
         var p = msgpack.Packer.init(&buf);
         try types.packActionSpotDeployRegisterHyperliquidity(&p, rh);
         var json_buf: [512]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&json_buf);
-        const w = fbs.writer();
-        try std.fmt.format(w, "{{\"type\":\"spotDeploy\",\"registerHyperliquidity\":{{\"spot\":{d},\"startPx\":\"{s}\",\"orderSz\":\"{s}\",\"nOrders\":{d}", .{ rh.spot, rh.start_px, rh.order_sz, rh.n_orders });
+        var w_storage: std.Io.Writer = .fixed(&json_buf);
+        const w = &w_storage;
+        try w.print("{{\"type\":\"spotDeploy\",\"registerHyperliquidity\":{{\"spot\":{d},\"startPx\":\"{s}\",\"orderSz\":\"{s}\",\"nOrders\":{d}", .{ rh.spot, rh.start_px, rh.order_sz, rh.n_orders });
         if (rh.n_seeded_levels) |nsl| {
-            try std.fmt.format(w, ",\"nSeededLevels\":{d}", .{nsl});
+            try w.print(",\"nSeededLevels\":{d}", .{nsl});
         }
         try w.writeAll("}}");
-        return self.sendSpotDeploy(s, p.written(), fbs.getWritten(), nonce);
+        return self.sendSpotDeploy(s, p.written(), w.buffered(), nonce);
     }
 
     pub fn spotDeployFreezeUser(self: *Client, s: Signer, token: u32, user: []const u8, freeze: bool, nonce: u64) !ExchangeResult {
@@ -1147,25 +1149,25 @@ pub const Client = struct {
         var p = msgpack.Packer.init(&buf);
         try types.packActionPerpDeployRegisterAsset(&p, ra);
         var json_buf: [2048]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&json_buf);
-        const w = fbs.writer();
+        var w_storage: std.Io.Writer = .fixed(&json_buf);
+        const w = &w_storage;
         try w.writeAll("{\"type\":\"perpDeploy\",\"registerAsset\":{");
         if (ra.max_gas) |mg| {
-            try std.fmt.format(w, "\"maxGas\":{d},", .{mg});
+            try w.print("\"maxGas\":{d},", .{mg});
         }
-        try std.fmt.format(w, "\"assetRequest\":{{\"coin\":\"{s}\",\"szDecimals\":{d},\"oraclePx\":\"{s}\",\"marginTableId\":{d},\"onlyIsolated\":{s}}}", .{
-            ra.coin, ra.sz_decimals, ra.oracle_px, ra.margin_table_id,
+        try w.print("\"assetRequest\":{{\"coin\":\"{s}\",\"szDecimals\":{d},\"oraclePx\":\"{s}\",\"marginTableId\":{d},\"onlyIsolated\":{s}}}", .{
+            ra.coin,                                   ra.sz_decimals, ra.oracle_px, ra.margin_table_id,
             if (ra.only_isolated) "true" else "false",
         });
-        try std.fmt.format(w, ",\"dex\":\"{s}\"", .{ra.dex});
+        try w.print(",\"dex\":\"{s}\"", .{ra.dex});
         if (ra.schema_full_name != null or ra.schema_collateral_token != null or ra.schema_oracle_updater != null) {
             try w.writeAll(",\"schema\":{");
-            try std.fmt.format(w, "\"fullName\":\"{s}\"", .{ra.schema_full_name orelse ""});
+            try w.print("\"fullName\":\"{s}\"", .{ra.schema_full_name orelse ""});
             if (ra.schema_collateral_token) |ct| {
-                try std.fmt.format(w, ",\"collateralToken\":{d}", .{ct});
+                try w.print(",\"collateralToken\":{d}", .{ct});
             }
             if (ra.schema_oracle_updater) |ou| {
-                try std.fmt.format(w, ",\"oracleUpdater\":\"{s}\"", .{ou});
+                try w.print(",\"oracleUpdater\":\"{s}\"", .{ou});
             } else {
                 try w.writeAll(",\"oracleUpdater\":null");
             }
@@ -1174,7 +1176,7 @@ pub const Client = struct {
             try w.writeAll(",\"schema\":null");
         }
         try w.writeAll("}}");
-        return self.sendPerpDeploy(s, p.written(), fbs.getWritten(), nonce);
+        return self.sendPerpDeploy(s, p.written(), w.buffered(), nonce);
     }
 
     pub fn perpDeploySetOracle(
@@ -1190,12 +1192,12 @@ pub const Client = struct {
         var p = msgpack.Packer.init(&buf);
         try types.packActionPerpDeploySetOracle(&p, dex, oracle_pxs, mark_pxs, external_perp_pxs);
         var json_buf: [8192]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&json_buf);
-        const w = fbs.writer();
-        try std.fmt.format(w, "{{\"type\":\"perpDeploy\",\"setOracle\":{{\"dex\":\"{s}\",\"oraclePxs\":[", .{dex});
+        var w_storage: std.Io.Writer = .fixed(&json_buf);
+        const w = &w_storage;
+        try w.print("{{\"type\":\"perpDeploy\",\"setOracle\":{{\"dex\":\"{s}\",\"oraclePxs\":[", .{dex});
         for (oracle_pxs, 0..) |entry, i| {
             if (i > 0) try w.writeAll(",");
-            try std.fmt.format(w, "[\"{s}\",\"{s}\"]", .{ entry.coin, entry.px });
+            try w.print("[\"{s}\",\"{s}\"]", .{ entry.coin, entry.px });
         }
         try w.writeAll("],\"markPxs\":[");
         for (mark_pxs, 0..) |group, gi| {
@@ -1203,17 +1205,17 @@ pub const Client = struct {
             try w.writeAll("[");
             for (group, 0..) |entry, i| {
                 if (i > 0) try w.writeAll(",");
-                try std.fmt.format(w, "[\"{s}\",\"{s}\"]", .{ entry.coin, entry.px });
+                try w.print("[\"{s}\",\"{s}\"]", .{ entry.coin, entry.px });
             }
             try w.writeAll("]");
         }
         try w.writeAll("],\"externalPerpPxs\":[");
         for (external_perp_pxs, 0..) |entry, i| {
             if (i > 0) try w.writeAll(",");
-            try std.fmt.format(w, "[\"{s}\",\"{s}\"]", .{ entry.coin, entry.px });
+            try w.print("[\"{s}\",\"{s}\"]", .{ entry.coin, entry.px });
         }
         try w.writeAll("]}}");
-        return self.sendPerpDeploy(s, p.written(), fbs.getWritten(), nonce);
+        return self.sendPerpDeploy(s, p.written(), w.buffered(), nonce);
     }
 
     // ── Validator/Signer ──────────────────────────────────────────
@@ -1267,15 +1269,14 @@ pub const Client = struct {
         var p = msgpack.Packer.init(&buf);
         try types.packActionCValidatorRegister(&p, reg.profile, reg.unjailed, reg.initial_wei);
         var json_buf: [2048]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&json_buf);
-        const w = fbs.writer();
-        try std.fmt.format(w, "{{\"type\":\"CValidatorAction\",\"register\":{{\"profile\":{{\"node_ip\":{{\"Ip\":\"{s}\"}},\"name\":\"{s}\",\"description\":\"{s}\",\"delegations_disabled\":{s},\"commission_bps\":{d},\"signer\":\"{s}\"}},\"unjailed\":{s},\"initial_wei\":{d}}}}}", .{
-            reg.profile.node_ip, reg.profile.name, reg.profile.description,
-            if (reg.profile.delegations_disabled) "true" else "false",
-            reg.profile.commission_bps, reg.profile.signer,
-            if (reg.unjailed) "true" else "false", reg.initial_wei,
+        var w_storage: std.Io.Writer = .fixed(&json_buf);
+        const w = &w_storage;
+        try w.print("{{\"type\":\"CValidatorAction\",\"register\":{{\"profile\":{{\"node_ip\":{{\"Ip\":\"{s}\"}},\"name\":\"{s}\",\"description\":\"{s}\",\"delegations_disabled\":{s},\"commission_bps\":{d},\"signer\":\"{s}\"}},\"unjailed\":{s},\"initial_wei\":{d}}}}}", .{
+            reg.profile.node_ip,                                       reg.profile.name,           reg.profile.description,
+            if (reg.profile.delegations_disabled) "true" else "false", reg.profile.commission_bps, reg.profile.signer,
+            if (reg.unjailed) "true" else "false",                     reg.initial_wei,
         });
-        return self.sendCValidator(s, p.written(), fbs.getWritten(), nonce);
+        return self.sendCValidator(s, p.written(), w.buffered(), nonce);
     }
 
     pub fn cValidatorChangeProfile(self: *Client, s: Signer, cp: types.ValidatorProfileChange, nonce: u64) !ExchangeResult {
@@ -1283,42 +1284,42 @@ pub const Client = struct {
         var p = msgpack.Packer.init(&buf);
         try types.packActionCValidatorChangeProfile(&p, cp);
         var json_buf: [2048]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&json_buf);
-        const w = fbs.writer();
+        var w_storage: std.Io.Writer = .fixed(&json_buf);
+        const w = &w_storage;
         try w.writeAll("{\"type\":\"CValidatorAction\",\"changeProfile\":{");
         if (cp.node_ip) |ip| {
-            try std.fmt.format(w, "\"node_ip\":{{\"Ip\":\"{s}\"}}", .{ip});
+            try w.print("\"node_ip\":{{\"Ip\":\"{s}\"}}", .{ip});
         } else {
             try w.writeAll("\"node_ip\":null");
         }
         if (cp.name) |n| {
-            try std.fmt.format(w, ",\"name\":\"{s}\"", .{n});
+            try w.print(",\"name\":\"{s}\"", .{n});
         } else {
             try w.writeAll(",\"name\":null");
         }
         if (cp.description) |d| {
-            try std.fmt.format(w, ",\"description\":\"{s}\"", .{d});
+            try w.print(",\"description\":\"{s}\"", .{d});
         } else {
             try w.writeAll(",\"description\":null");
         }
-        try std.fmt.format(w, ",\"unjailed\":{s}", .{if (cp.unjailed) "true" else "false"});
+        try w.print(",\"unjailed\":{s}", .{if (cp.unjailed) "true" else "false"});
         if (cp.disable_delegations) |dd| {
-            try std.fmt.format(w, ",\"disable_delegations\":{s}", .{if (dd) "true" else "false"});
+            try w.print(",\"disable_delegations\":{s}", .{if (dd) "true" else "false"});
         } else {
             try w.writeAll(",\"disable_delegations\":null");
         }
         if (cp.commission_bps) |cb| {
-            try std.fmt.format(w, ",\"commission_bps\":{d}", .{cb});
+            try w.print(",\"commission_bps\":{d}", .{cb});
         } else {
             try w.writeAll(",\"commission_bps\":null");
         }
         if (cp.signer) |sg| {
-            try std.fmt.format(w, ",\"signer\":\"{s}\"", .{sg});
+            try w.print(",\"signer\":\"{s}\"", .{sg});
         } else {
             try w.writeAll(",\"signer\":null");
         }
         try w.writeAll("}}");
-        return self.sendCValidator(s, p.written(), fbs.getWritten(), nonce);
+        return self.sendCValidator(s, p.written(), w.buffered(), nonce);
     }
 
     pub fn cValidatorUnregister(self: *Client, s: Signer, nonce: u64) !ExchangeResult {
@@ -1420,12 +1421,32 @@ pub const Client = struct {
         return self.infoTyped([]R.SubAccount, body);
     }
 
+    fn infoTypedFilteredOptional(self: *Client, comptime T: type, body: []const u8) !Parsed([]T) {
+        const parsed = try self.infoTyped([]?T, body);
+
+        var count: usize = 0;
+        for (parsed.value) |entry| {
+            if (entry != null) count += 1;
+        }
+
+        const filtered = try parsed.arena.allocator().alloc(T, count);
+        var i: usize = 0;
+        for (parsed.value) |entry| {
+            if (entry) |value| {
+                filtered[i] = value;
+                i += 1;
+            }
+        }
+
+        return .{ .arena = parsed.arena, .value = filtered };
+    }
+
     pub fn getDexInfos(self: *Client) !Parsed([]R.DexInfo) {
-        return self.infoTyped([]R.DexInfo, "{\"type\":\"perpDexs\"}");
+        return self.infoTypedFilteredOptional(R.DexInfo, "{\"type\":\"perpDexs\"}");
     }
 
     pub fn getPerpDexs(self: *Client) !Parsed([]R.Dex) {
-        return self.infoTyped([]R.Dex,
+        return self.infoTypedFilteredOptional(R.Dex,
             \\{"type":"perpDexs"}
         );
     }
@@ -1466,29 +1487,30 @@ pub const Client = struct {
         const meta_val = val.array.items[0];
         const ctxs_val = val.array.items[1];
 
-        // Parse spotMeta
-        const meta = try std.json.parseFromValue(R.SpotMeta, self.allocator, meta_val, R.ParseOpts);
+        var arena: std.heap.ArenaAllocator = .init(self.allocator);
+        errdefer arena.deinit();
+        const a = arena.allocator();
 
-        // Parse asset contexts array
+        const meta = try std.json.parseFromValue(R.SpotMeta, a, meta_val, R.ParseOpts);
+
         const ctx_arr = if (ctxs_val == .array) ctxs_val.array.items else return error.Overflow;
-        var ctxs = try self.allocator.alloc(R.SpotAssetCtx, ctx_arr.len);
+        var ctxs = try a.alloc(R.SpotAssetCtx, ctx_arr.len);
         var count: usize = 0;
         for (ctx_arr) |item| {
-            const ctx = std.json.parseFromValue(R.SpotAssetCtx, self.allocator, item, R.ParseOpts) catch continue;
+            const ctx = std.json.parseFromValue(R.SpotAssetCtx, a, item, R.ParseOpts) catch continue;
             ctxs[count] = ctx.value;
             count += 1;
         }
-        return .{ .meta = meta.value, .ctxs = ctxs[0..count], .alloc_len = ctx_arr.len, .allocator = self.allocator };
+        return .{ .arena = arena, .meta = meta.value, .ctxs = ctxs[0..count] };
     }
 
     pub const SpotMetaAndAssetCtxsResult = struct {
+        arena: std.heap.ArenaAllocator,
         meta: R.SpotMeta,
         ctxs: []R.SpotAssetCtx,
-        alloc_len: usize,
-        allocator: std.mem.Allocator,
 
         pub fn deinit(self: *SpotMetaAndAssetCtxsResult) void {
-            self.allocator.free(self.ctxs.ptr[0..self.alloc_len]);
+            self.arena.deinit();
         }
     };
 
@@ -1525,27 +1547,28 @@ pub const Client = struct {
         const u_arr = universe_arr orelse return error.Overflow;
         const c_arr = ctx_arr orelse return error.Overflow;
         const n = @min(u_arr.len, c_arr.len);
-        var entries = try self.allocator.alloc(R.MetaAndAssetCtx, n);
+
+        var arena: std.heap.ArenaAllocator = .init(self.allocator);
+        errdefer arena.deinit();
+        const a = arena.allocator();
+
+        var entries = try a.alloc(R.MetaAndAssetCtx, n);
         var count: usize = 0;
         for (0..n) |i| {
-            const meta = std.json.parseFromValue(R.PerpMeta, self.allocator, u_arr[i], R.ParseOpts) catch continue;
-            const ctx = std.json.parseFromValue(R.AssetContext, self.allocator, c_arr[i], R.ParseOpts) catch {
-                meta.deinit();
-                continue;
-            };
+            const meta = std.json.parseFromValue(R.PerpMeta, a, u_arr[i], R.ParseOpts) catch continue;
+            const ctx = std.json.parseFromValue(R.AssetContext, a, c_arr[i], R.ParseOpts) catch continue;
             entries[count] = .{ .meta = meta.value, .ctx = ctx.value };
             count += 1;
         }
-        return .{ .entries = entries[0..count], .alloc_len = n, .allocator = self.allocator };
+        return .{ .arena = arena, .entries = entries[0..count] };
     }
 
     pub const MetaAndAssetCtxsResult = struct {
+        arena: std.heap.ArenaAllocator,
         entries: []R.MetaAndAssetCtx,
-        alloc_len: usize,
-        allocator: std.mem.Allocator,
 
         pub fn deinit(self: *MetaAndAssetCtxsResult) void {
-            self.allocator.free(self.entries.ptr[0..self.alloc_len]);
+            self.arena.deinit();
         }
     };
 
@@ -1653,8 +1676,6 @@ pub const Client = struct {
             return std.mem.eql(u8, status_str, "ok");
         }
 
-
-
         pub fn deinit(self: *ExchangeResult) void {
             if (self.parsed) |*p| p.deinit();
             self.allocator.free(self.body);
@@ -1711,20 +1732,19 @@ pub const Client = struct {
         expires_after: ?u64,
     ) !ExchangeResult {
         var body_buf: [8192]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&body_buf);
-        const writer = fbs.writer();
+        var writer: std.Io.Writer = .fixed(&body_buf);
 
         try writer.writeAll("{\"action\":");
-        try writeActionJson(writer, action_data);
+        try writeActionJson(&writer, action_data);
         const sig_json_1 = sigJsonStr(sig);
-        try std.fmt.format(writer, ",\"nonce\":{d},\"signature\":{s}", .{
+        try writer.print(",\"nonce\":{d},\"signature\":{s}", .{
             nonce,
             sigJsonSlice(&sig_json_1),
         });
-        try writeOptionalAddress(writer, ",\"vaultAddress\":", vault_address);
-        try writeOptionalU64(writer, ",\"expiresAfter\":", expires_after);
+        try writeOptionalAddress(&writer, ",\"vaultAddress\":", vault_address);
+        try writeOptionalU64(&writer, ",\"expiresAfter\":", expires_after);
         try writer.writeAll("}");
-        return self.exchangeRequestDyn(fbs.getWritten());
+        return self.exchangeRequestDyn(writer.buffered());
     }
 
     /// Generic exchange endpoint for RMP-path actions that need JSON serialization.
@@ -1748,20 +1768,19 @@ pub const Client = struct {
         expires_after: ?u64,
     ) !ExchangeResult {
         var body_buf: [8192]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&body_buf);
-        const writer = fbs.writer();
+        var writer: std.Io.Writer = .fixed(&body_buf);
 
         try writer.writeAll("{\"action\":");
-        try writeActionJsonTagged(writer, action_data, tag);
+        try writeActionJsonTagged(&writer, action_data, tag);
         const sig_json = sigJsonStr(sig);
-        try std.fmt.format(writer, ",\"nonce\":{d},\"signature\":{s}", .{
+        try writer.print(",\"nonce\":{d},\"signature\":{s}", .{
             nonce,
             sigJsonSlice(&sig_json),
         });
-        try writeOptionalAddress(writer, ",\"vaultAddress\":", vault_address);
-        try writeOptionalU64(writer, ",\"expiresAfter\":", expires_after);
+        try writeOptionalAddress(&writer, ",\"vaultAddress\":", vault_address);
+        try writeOptionalU64(&writer, ",\"expiresAfter\":", expires_after);
         try writer.writeAll("}");
-        return self.exchangeRequestDyn(fbs.getWritten());
+        return self.exchangeRequestDyn(writer.buffered());
     }
 
     fn writeOptionalAddress(writer: anytype, prefix: []const u8, addr: ?Address) !void {
@@ -1781,7 +1800,7 @@ pub const Client = struct {
     fn writeOptionalU64(writer: anytype, prefix: []const u8, val: ?u64) !void {
         try writer.writeAll(prefix);
         if (val) |v| {
-            try std.fmt.format(writer, "{d}", .{v});
+            try writer.print("{d}", .{v});
         } else {
             try writer.writeAll("null");
         }
@@ -1842,12 +1861,12 @@ fn writeActionJson(writer: anytype, action_data: anytype) !void {
             if (i > 0) try writer.writeAll(",");
             try writeOrderJson(writer, order);
         }
-        try std.fmt.format(writer, "],\"grouping\":\"{s}\"}}", .{@tagName(action_data.grouping)});
+        try writer.print("],\"grouping\":\"{s}\"}}", .{@tagName(action_data.grouping)});
     } else if (T == types.BatchCancel) {
         try writer.writeAll("{\"type\":\"cancel\",\"cancels\":[");
         for (action_data.cancels, 0..) |c, i| {
             if (i > 0) try writer.writeAll(",");
-            try std.fmt.format(writer, "{{\"a\":{d},\"o\":{d}}}", .{ c.asset, c.oid });
+            try writer.print("{{\"a\":{d},\"o\":{d}}}", .{ c.asset, c.oid });
         }
         try writer.writeAll("]}");
     } else {
@@ -1856,14 +1875,14 @@ fn writeActionJson(writer: anytype, action_data: anytype) !void {
 }
 
 fn writeActionJsonTagged(writer: anytype, action_data: anytype, tag: types.ActionTag) !void {
-    try std.fmt.format(writer, "{{\"type\":\"{s}\"", .{@tagName(tag)});
+    try writer.print("{{\"type\":\"{s}\"", .{@tagName(tag)});
     const T = @TypeOf(action_data);
     if (T == types.BatchCancelCloid) {
         try writer.writeAll(",\"cancels\":[");
         for (action_data.cancels, 0..) |c, i| {
             if (i > 0) try writer.writeAll(",");
             const hex = types.cloidToHex(c.cloid);
-            try std.fmt.format(writer, "{{\"asset\":{d},\"cloid\":\"{s}\"}}", .{ c.asset, @as([]const u8, &hex) });
+            try writer.print("{{\"asset\":{d},\"cloid\":\"{s}\"}}", .{ c.asset, @as([]const u8, &hex) });
         }
         try writer.writeAll("]}");
     } else if (T == types.BatchModify) {
@@ -1872,10 +1891,10 @@ fn writeActionJsonTagged(writer: anytype, action_data: anytype, tag: types.Actio
             if (i > 0) try writer.writeAll(",");
             try writer.writeAll("{\"oid\":");
             switch (m.oid) {
-                .oid => |oid| try std.fmt.format(writer, "{d}", .{oid}),
+                .oid => |oid| try writer.print("{d}", .{oid}),
                 .cloid => |cloid| {
                     const hex = types.cloidToHex(cloid);
-                    try std.fmt.format(writer, "\"{s}\"", .{@as([]const u8, &hex)});
+                    try writer.print("\"{s}\"", .{@as([]const u8, &hex)});
                 },
             }
             try writer.writeAll(",\"order\":");
@@ -1885,40 +1904,40 @@ fn writeActionJsonTagged(writer: anytype, action_data: anytype, tag: types.Actio
         try writer.writeAll("]}");
     } else if (T == types.ScheduleCancel) {
         if (action_data.time) |t| {
-            try std.fmt.format(writer, ",\"time\":{d}}}", .{t});
+            try writer.print(",\"time\":{d}}}", .{t});
         } else {
             try writer.writeAll(",\"time\":null}");
         }
     } else if (T == types.UpdateIsolatedMargin) {
-        try std.fmt.format(writer, ",\"asset\":{d},\"isBuy\":{s},\"ntli\":{d}}}", .{
+        try writer.print(",\"asset\":{d},\"isBuy\":{s},\"ntli\":{d}}}", .{
             action_data.asset,
             if (action_data.is_buy) "true" else "false",
             action_data.ntli,
         });
     } else if (T == types.UpdateLeverage) {
-        try std.fmt.format(writer, ",\"asset\":{d},\"isCross\":{s},\"leverage\":{d}}}", .{
+        try writer.print(",\"asset\":{d},\"isCross\":{s},\"leverage\":{d}}}", .{
             action_data.asset,
             if (action_data.is_cross) "true" else "false",
             action_data.leverage,
         });
     } else if (T == types.SetReferrer) {
-        try std.fmt.format(writer, ",\"code\":\"{s}\"}}", .{action_data.code});
+        try writer.print(",\"code\":\"{s}\"}}", .{action_data.code});
     } else if (T == types.VaultTransfer) {
-        try std.fmt.format(writer, ",\"vaultAddress\":\"{s}\",\"isDeposit\":{s},\"usd\":{d}}}", .{
+        try writer.print(",\"vaultAddress\":\"{s}\",\"isDeposit\":{s},\"usd\":{d}}}", .{
             action_data.vault_address,
             if (action_data.is_deposit) "true" else "false",
             action_data.usd,
         });
     } else if (T == types.CreateSubAccount) {
-        try std.fmt.format(writer, ",\"name\":\"{s}\"}}", .{action_data.name});
+        try writer.print(",\"name\":\"{s}\"}}", .{action_data.name});
     } else if (T == types.SubAccountTransfer) {
-        try std.fmt.format(writer, ",\"subAccountUser\":\"{s}\",\"isDeposit\":{s},\"usd\":{d}}}", .{
+        try writer.print(",\"subAccountUser\":\"{s}\",\"isDeposit\":{s},\"usd\":{d}}}", .{
             action_data.sub_account_user,
             if (action_data.is_deposit) "true" else "false",
             action_data.usd,
         });
     } else if (T == types.SubAccountSpotTransfer) {
-        try std.fmt.format(writer, ",\"subAccountUser\":\"{s}\",\"isDeposit\":{s},\"token\":\"{s}\",\"amount\":\"{s}\"}}", .{
+        try writer.print(",\"subAccountUser\":\"{s}\",\"isDeposit\":{s},\"token\":\"{s}\",\"amount\":\"{s}\"}}", .{
             action_data.sub_account_user,
             if (action_data.is_deposit) "true" else "false",
             action_data.token,
@@ -1927,7 +1946,7 @@ fn writeActionJsonTagged(writer: anytype, action_data: anytype, tag: types.Actio
     } else if (T == types.TwapOrder) {
         var sz_buf: [64]u8 = undefined;
         const sz_str = action_data.sz.normalize().toString(&sz_buf) catch return error.BufferOverflow;
-        try std.fmt.format(writer, ",\"twap\":{{\"a\":{d},\"b\":{s},\"s\":\"{s}\",\"r\":{s},\"m\":{d},\"t\":{s}}}}}", .{
+        try writer.print(",\"twap\":{{\"a\":{d},\"b\":{s},\"s\":\"{s}\",\"r\":{s},\"m\":{d},\"t\":{s}}}}}", .{
             action_data.asset,
             if (action_data.is_buy) "true" else "false",
             sz_str,
@@ -1936,7 +1955,7 @@ fn writeActionJsonTagged(writer: anytype, action_data: anytype, tag: types.Actio
             if (action_data.randomize) "true" else "false",
         });
     } else if (T == types.TwapCancel) {
-        try std.fmt.format(writer, ",\"a\":{d},\"t\":{d}}}", .{
+        try writer.print(",\"a\":{d},\"t\":{d}}}", .{
             action_data.asset,
             action_data.twap_id,
         });
@@ -1950,7 +1969,7 @@ fn writeOrderJson(writer: anytype, order: types.OrderRequest) !void {
     const px_str = order.limit_px.normalize().toString(&px_buf) catch return error.BufferOverflow;
     var sz_buf: [64]u8 = undefined;
     const sz_str = order.sz.normalize().toString(&sz_buf) catch return error.BufferOverflow;
-    try std.fmt.format(writer, "{{\"a\":{d},\"b\":{},\"p\":\"{s}\",\"s\":\"{s}\",\"r\":{}", .{
+    try writer.print("{{\"a\":{d},\"b\":{},\"p\":\"{s}\",\"s\":\"{s}\",\"r\":{}", .{
         order.asset,
         order.is_buy,
         px_str,
@@ -1961,12 +1980,12 @@ fn writeOrderJson(writer: anytype, order: types.OrderRequest) !void {
     // Order type
     switch (order.order_type) {
         .limit => |lim| {
-            try std.fmt.format(writer, ",\"t\":{{\"limit\":{{\"tif\":\"{s}\"}}}}", .{@tagName(lim.tif)});
+            try writer.print(",\"t\":{{\"limit\":{{\"tif\":\"{s}\"}}}}", .{@tagName(lim.tif)});
         },
         .trigger => |trig| {
             var tpx_buf: [64]u8 = undefined;
             const tpx_str = trig.trigger_px.normalize().toString(&tpx_buf) catch return error.BufferOverflow;
-            try std.fmt.format(writer, ",\"t\":{{\"trigger\":{{\"isMarket\":{},\"triggerPx\":\"{s}\",\"tpsl\":\"{s}\"}}}}", .{
+            try writer.print(",\"t\":{{\"trigger\":{{\"isMarket\":{},\"triggerPx\":\"{s}\",\"tpsl\":\"{s}\"}}}}", .{
                 trig.is_market,
                 tpx_str,
                 @tagName(trig.tpsl),
@@ -1977,7 +1996,7 @@ fn writeOrderJson(writer: anytype, order: types.OrderRequest) !void {
     // c: cloid — omit when zero to match server hashing
     if (!std.mem.eql(u8, &order.cloid, &types.ZERO_CLOID)) {
         const cloid_hex = types.cloidToHex(order.cloid);
-        try std.fmt.format(writer, ",\"c\":\"{s}\"}}", .{@as([]const u8, &cloid_hex)});
+        try writer.print(",\"c\":\"{s}\"}}", .{@as([]const u8, &cloid_hex)});
     } else {
         try writer.writeAll("}");
     }
@@ -2087,9 +2106,9 @@ test "writeOrderJson" {
     };
 
     var buf: [512]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    try writeOrderJson(fbs.writer(), order);
-    const json = fbs.getWritten();
+    var writer: std.Io.Writer = .fixed(&buf);
+    try writeOrderJson(&writer, order);
+    const json = writer.buffered();
 
     // Verify it contains expected fields
     try std.testing.expect(std.mem.indexOf(u8, json, "\"a\":0") != null);

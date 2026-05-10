@@ -14,6 +14,7 @@
 
 const std = @import("std");
 const json = @import("json.zig");
+const runtime = @import("../lib/runtime.zig");
 const Decimal = @import("../lib/math/decimal.zig").Decimal;
 
 pub const ParseOpts = std.json.ParseOptions{
@@ -96,7 +97,6 @@ pub const MarginSummary = struct {
     pub fn availableMargin(self: MarginSummary) Decimal {
         return self.accountValue.subtract(self.totalMarginUsed);
     }
-
 };
 
 pub const Leverage = struct {
@@ -126,8 +126,6 @@ pub const PositionData = struct {
 pub const AssetPosition = struct {
     type: []const u8 = "oneWay",
     position: PositionData = .{},
-
-
 };
 
 pub const ClearinghouseState = struct {
@@ -145,8 +143,6 @@ pub const UserBalance = struct {
     hold: Decimal = Decimal.ZERO,
     total: Decimal = Decimal.ZERO,
     entryNtl: ?Decimal = null,
-
-
 };
 
 pub const SpotClearinghouseState = struct {
@@ -170,8 +166,6 @@ pub const Fill = struct {
     feeToken: []const u8 = "",
     cloid: ?[]const u8 = null,
     twapId: ?u64 = null,
-
-
 };
 
 pub const BasicOrder = struct {
@@ -200,16 +194,16 @@ pub const HistoricalOrder = struct {
 };
 
 pub const Candle = struct {
-    t: u64 = 0,  // openTime
-    T: u64 = 0,  // closeTime
-    s: []const u8 = "",  // coin
-    i: []const u8 = "",  // interval
-    o: Decimal = Decimal.ZERO,  // open
-    h: Decimal = Decimal.ZERO,  // high
-    l: Decimal = Decimal.ZERO,  // low
-    c: Decimal = Decimal.ZERO,  // close
-    v: Decimal = Decimal.ZERO,  // volume
-    n: u64 = 0,  // numTrades
+    t: u64 = 0, // openTime
+    T: u64 = 0, // closeTime
+    s: []const u8 = "", // coin
+    i: []const u8 = "", // interval
+    o: Decimal = Decimal.ZERO, // open
+    h: Decimal = Decimal.ZERO, // high
+    l: Decimal = Decimal.ZERO, // low
+    c: Decimal = Decimal.ZERO, // close
+    v: Decimal = Decimal.ZERO, // volume
+    n: u64 = 0, // numTrades
 };
 
 pub const Trade = struct {
@@ -576,20 +570,18 @@ pub const BorrowLendUserState = struct {
     positions: ?[]BorrowLendPosition = null,
 };
 
-
-
 // ── Nonce Handler ─────────────────────────────────────────────
 
 pub const NonceHandler = struct {
     nonce: std.atomic.Value(u64),
 
     pub fn init() NonceHandler {
-        const now: u64 = @intCast(std.time.milliTimestamp());
+        const now = runtime.nonceMs();
         return .{ .nonce = std.atomic.Value(u64).init(now) };
     }
 
     pub fn next(self: *NonceHandler) u64 {
-        const now: u64 = @intCast(std.time.milliTimestamp());
+        const now = runtime.nonceMs();
         var current = self.nonce.load(.acquire);
         while (true) {
             const new_val = @max(current + 1, now);

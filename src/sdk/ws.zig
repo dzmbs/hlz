@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("../lib/runtime.zig");
 const signing = @import("signing.zig");
 const Chain = signing.Chain;
 const ws = @import("websocket");
@@ -138,9 +139,18 @@ pub fn extractData(text: []const u8) ?[]const u8 {
     var i = start;
     while (i < text.len) : (i += 1) {
         const c = text[i];
-        if (escape) { escape = false; continue; }
-        if (c == '\\' and in_string) { escape = true; continue; }
-        if (c == '"') { in_string = !in_string; continue; }
+        if (escape) {
+            escape = false;
+            continue;
+        }
+        if (c == '\\' and in_string) {
+            escape = true;
+            continue;
+        }
+        if (c == '"') {
+            in_string = !in_string;
+            continue;
+        }
         if (in_string) continue;
         if (c == '{' or c == '[') {
             depth += 1;
@@ -203,7 +213,7 @@ pub const Connection = struct {
             .chain = chain,
         };
 
-        self.client = try ws.Client.init(allocator, .{
+        self.client = try ws.Client.init(runtime.io(), allocator, .{
             .host = host,
             .port = port,
             .tls = is_tls,
@@ -223,7 +233,7 @@ pub const Connection = struct {
             return e;
         };
 
-        self.socket_fd = self.client.stream.stream.handle;
+        self.socket_fd = self.client.stream.stream.socket.handle;
         return self;
     }
 
