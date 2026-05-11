@@ -10,6 +10,7 @@ const std = @import("std");
 const hlz = @import("hlz");
 const signer_mod = hlz.crypto.signer;
 const signing = hlz.hypercore.signing;
+const runtime = hlz.runtime;
 const args_mod = @import("args.zig");
 const keystore = @import("keystore.zig");
 
@@ -78,12 +79,12 @@ pub fn load(allocator: std.mem.Allocator, flags: args_mod.GlobalFlags) Config {
     loadEnvFile(allocator, &config);
 
     // Environment variables override .env
-    if (getEnv("HL_KEY")) |v| config.key_hex = v;
-    if (getEnv("HL_ADDRESS")) |v| config.address = v;
-    if (getEnv("HL_CHAIN")) |v| {
+    if (runtime.getenv("HL_KEY")) |v| config.key_hex = v;
+    if (runtime.getenv("HL_ADDRESS")) |v| config.address = v;
+    if (runtime.getenv("HL_CHAIN")) |v| {
         if (std.mem.eql(u8, v, "testnet")) config.chain = .testnet;
     }
-    if (getEnv("HL_OUTPUT")) |v| {
+    if (runtime.getenv("HL_OUTPUT")) |v| {
         if (args_mod.OutputFormat.fromStr(v)) |fmt| {
             if (flags.output == .pretty and !flags.output_explicit) {
                 config.output_override = fmt;
@@ -92,7 +93,7 @@ pub fn load(allocator: std.mem.Allocator, flags: args_mod.GlobalFlags) Config {
     }
     // Compatibility with e2e tests
     if (config.key_hex == null) {
-        if (getEnv("TRADING_KEY")) |v| config.key_hex = v;
+        if (runtime.getenv("TRADING_KEY")) |v| config.key_hex = v;
     }
 
     // Command-line flags override everything
@@ -108,7 +109,7 @@ pub fn load(allocator: std.mem.Allocator, flags: args_mod.GlobalFlags) Config {
             break :blk keystore.getDefaultNameBuf(&dbuf);
         };
         if (key_name) |name| {
-            const pw = getEnv("HL_PASSWORD");
+            const pw = runtime.getenv("HL_PASSWORD");
             if (pw) |password| {
                 const data = keystore.load(allocator, name) catch null;
                 if (data) |ks_data| {
@@ -135,17 +136,13 @@ pub fn load(allocator: std.mem.Allocator, flags: args_mod.GlobalFlags) Config {
     return config;
 }
 
-fn getEnv(name: []const u8) ?[]const u8 {
-    const v = std.posix.getenv(name) orelse return null;
-    return if (v.len == 0) null else v;
-}
-
 fn loadEnvFile(allocator: std.mem.Allocator, config: *Config) void {
-    const buf = std.fs.cwd().readFileAlloc(allocator, ".env", 64 * 1024) catch {
-        const home = std.posix.getenv("HOME") orelse return;
+    const io = runtime.io();
+    const buf = std.Io.Dir.cwd().readFileAlloc(io, ".env", allocator, .limited(64 * 1024)) catch {
+        const home = runtime.getenv("HOME") orelse return;
         var path_buf: [512]u8 = undefined;
         const path = std.fmt.bufPrint(&path_buf, "{s}/.hl/config", .{home}) catch return;
-        const buf2 = std.fs.cwd().readFileAlloc(allocator, path, 64 * 1024) catch return;
+        const buf2 = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(64 * 1024)) catch return;
         config.env_buf = buf2;
         parseEnvBuf(buf2, config);
         return;

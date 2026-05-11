@@ -5,6 +5,7 @@
 const std = @import("std");
 const hlz = @import("hlz");
 const Signer = hlz.crypto.signer.Signer;
+const runtime = hlz.runtime;
 
 const aes = std.crypto.core.aes;
 const Aes128Ctx = aes.AesEncryptCtx(aes.Aes128);
@@ -16,15 +17,15 @@ pub const KeystoreError = error{
     NotFound,
     AlreadyExists,
     IoError,
-} || std.crypto.pwhash.KdfError || std.mem.Allocator.Error;
+} || std.crypto.pwhash.KdfError || std.mem.Allocator.Error || std.Io.RandomSecureError;
 
 /// Encrypt a 32-byte private key into Ethereum V3 keystore JSON.
 pub fn encrypt(allocator: std.mem.Allocator, key: [32]u8, password: []const u8) KeystoreError![]u8 {
     // Generate random salt (32 bytes) and IV (16 bytes)
     var salt: [32]u8 = undefined;
     var iv: [16]u8 = undefined;
-    std.crypto.random.bytes(&salt);
-    std.crypto.random.bytes(&iv);
+    try runtime.fillRandomSecure(&salt);
+    try runtime.fillRandomSecure(&iv);
 
     // Derive 32 bytes via scrypt (n=8192, r=8, p=1 — standard light params)
     var derived: [32]u8 = undefined;
@@ -144,10 +145,10 @@ pub fn decrypt(allocator: std.mem.Allocator, json_data: []const u8, password: []
 
 /// Get the keys directory (~/.hl/keys/), creating if needed.
 pub fn keysDir() ![512]u8 {
-    const home = std.posix.getenv("HOME") orelse return error.IoError;
+    const home = runtime.getenv("HOME") orelse return error.IoError;
     var buf: [512]u8 = undefined;
     const path = std.fmt.bufPrint(&buf, "{s}/.hl/keys", .{home}) catch return error.IoError;
-    std.fs.cwd().makePath(path) catch {};
+    std.Io.Dir.cwd().createDirPath(runtime.io(), path) catch {};
     return buf;
 }
 
@@ -155,15 +156,16 @@ pub fn keysDir() ![512]u8 {
 pub fn save(name: []const u8, data: []const u8) !void {
     _ = try keysDir();
     var path_buf: [576]u8 = undefined;
-    const home = std.posix.getenv("HOME") orelse return error.IoError;
+    const home = runtime.getenv("HOME") orelse return error.IoError;
     const path = std.fmt.bufPrint(&path_buf, "{s}/.hl/keys/{s}.json", .{ home, name }) catch return error.IoError;
+    const io = runtime.io();
 
     // Check if exists
-    std.fs.cwd().access(path, .{}) catch {
+    std.Io.Dir.cwd().access(io, path, .{}) catch {
         // Doesn't exist, good
-        const file = std.fs.cwd().createFile(path, .{}) catch return error.IoError;
-        defer file.close();
-        file.writeAll(data) catch return error.IoError;
+        const file = std.Io.Dir.cwd().createFile(io, path, .{}) catch return error.IoError;
+        defer file.close(io);
+        file.writeStreamingAll(io, data) catch return error.IoError;
         // chmod 600
         const fd = file.handle;
         _ = std.c.fchmod(fd, 0o600);
@@ -174,24 +176,25 @@ pub fn save(name: []const u8, data: []const u8) !void {
 
 /// Load keystore JSON from ~/.hl/keys/<name>.json
 pub fn load(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
-    const home = std.posix.getenv("HOME") orelse return error.IoError;
+    const home = runtime.getenv("HOME") orelse return error.IoError;
     var path_buf: [576]u8 = undefined;
     const path = std.fmt.bufPrint(&path_buf, "{s}/.hl/keys/{s}.json", .{ home, name }) catch return error.IoError;
-    return std.fs.cwd().readFileAlloc(allocator, path, 8192) catch return error.NotFound;
+    return std.Io.Dir.cwd().readFileAlloc(runtime.io(), path, allocator, .limited(8192)) catch return error.NotFound;
 }
 
 /// List all keystore names + addresses in ~/.hl/keys/
 pub fn list(allocator: std.mem.Allocator) ![]Entry {
-    const home = std.posix.getenv("HOME") orelse return error.IoError;
+    const home = runtime.getenv("HOME") orelse return error.IoError;
     var path_buf: [512]u8 = undefined;
     const path = std.fmt.bufPrint(&path_buf, "{s}/.hl/keys", .{home}) catch return error.IoError;
+    const io = runtime.io();
 
-    var dir = std.fs.cwd().openDir(path, .{ .iterate = true }) catch return allocator.alloc(Entry, 0);
-    defer dir.close();
+    var dir = std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true }) catch return allocator.alloc(Entry, 0);
+    defer dir.close(io);
 
     var entries = std.array_list.AlignedManaged(Entry, null).init(allocator);
     var iter = dir.iterate();
-    while (iter.next() catch null) |entry| {
+    while (iter.next(io) catch null) |entry| {
         if (entry.kind != .file) continue;
         const fname = entry.name;
         if (!std.mem.endsWith(u8, fname, ".json")) continue;
@@ -203,7 +206,7 @@ pub fn list(allocator: std.mem.Allocator) ![]Entry {
         @memcpy(name_copy[0..name.len], name);
 
         var addr: [42]u8 = .{0} ** 42;
-        const data = dir.readFileAlloc(allocator, fname, 8192) catch continue;
+        const data = dir.readFileAlloc(io, fname, allocator, .limited(8192)) catch continue;
         defer allocator.free(data);
         const p = std.json.parseFromSlice(std.json.Value, allocator, data, .{}) catch continue;
         defer p.deinit();
@@ -247,51 +250,35 @@ pub const Entry = struct {
 
 /// Delete a keystore
 pub fn remove(name: []const u8) !void {
-    const home = std.posix.getenv("HOME") orelse return error.IoError;
+    const home = runtime.getenv("HOME") orelse return error.IoError;
     var path_buf: [576]u8 = undefined;
     const path = std.fmt.bufPrint(&path_buf, "{s}/.hl/keys/{s}.json", .{ home, name }) catch return error.IoError;
-    std.fs.cwd().deleteFile(path) catch return error.NotFound;
+    std.Io.Dir.cwd().deleteFile(runtime.io(), path) catch return error.NotFound;
 }
 
 /// Set default key name in ~/.hl/default
 pub fn setDefault(name: []const u8) !void {
-    const home = std.posix.getenv("HOME") orelse return error.IoError;
+    const home = runtime.getenv("HOME") orelse return error.IoError;
     var path_buf: [576]u8 = undefined;
-    std.fs.cwd().makePath(std.fmt.bufPrint(&path_buf, "{s}/.hl", .{home}) catch return error.IoError) catch {};
+    const io = runtime.io();
+    std.Io.Dir.cwd().createDirPath(io, std.fmt.bufPrint(&path_buf, "{s}/.hl", .{home}) catch return error.IoError) catch {};
     const path = std.fmt.bufPrint(&path_buf, "{s}/.hl/default", .{home}) catch return error.IoError;
-    const file = std.fs.cwd().createFile(path, .{}) catch return error.IoError;
-    defer file.close();
-    file.writeAll(name) catch return error.IoError;
-}
-
-/// Get default key name from ~/.hl/default
-pub fn getDefaultName() ?[]const u8 {
-    const home = std.posix.getenv("HOME") orelse return null;
-    var path_buf: [576]u8 = undefined;
-    const path = std.fmt.bufPrint(&path_buf, "{s}/.hl/default", .{home}) catch return null;
-    var buf: [64]u8 = undefined;
-    const file = std.fs.cwd().openFile(path, .{}) catch return null;
-    defer file.close();
-    const n = file.readAll(&buf) catch return null;
-    const trimmed = std.mem.trim(u8, buf[0..n], " \t\r\n");
-    if (trimmed.len == 0) return null;
-    // Return pointer to static — safe because buf is on stack but we need persistent
-    // Actually this is a problem — the caller needs to copy. For now return null
-    // and let config.zig read the file directly.
-    return null;
+    const file = std.Io.Dir.cwd().createFile(io, path, .{}) catch return error.IoError;
+    defer file.close(io);
+    file.writeStreamingAll(io, name) catch return error.IoError;
 }
 
 /// Read default key name into a caller-provided buffer
 pub fn getDefaultNameBuf(buf: []u8) ?[]const u8 {
-    const home = std.posix.getenv("HOME") orelse return null;
+    const home = runtime.getenv("HOME") orelse return null;
     var path_buf: [576]u8 = undefined;
     const path = std.fmt.bufPrint(&path_buf, "{s}/.hl/default", .{home}) catch return null;
-    const file = std.fs.cwd().openFile(path, .{}) catch return null;
-    defer file.close();
-    const n = file.readAll(buf) catch return null;
-    const trimmed = std.mem.trim(u8, buf[0..n], " \t\r\n");
-    if (trimmed.len == 0) return null;
-    return trimmed;
+    const data = std.Io.Dir.cwd().readFileAlloc(runtime.io(), path, std.heap.page_allocator, .limited(buf.len)) catch return null;
+    defer std.heap.page_allocator.free(data);
+    const trimmed = std.mem.trim(u8, data, " \t\r\n");
+    if (trimmed.len == 0 or trimmed.len > buf.len) return null;
+    @memcpy(buf[0..trimmed.len], trimmed);
+    return buf[0..trimmed.len];
 }
 
 // ── Helpers ───────────────────────────────────────────────

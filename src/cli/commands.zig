@@ -1,7 +1,7 @@
-
 const std = @import("std");
 const posix = std.posix;
 const hlz = @import("hlz");
+const runtime = hlz.runtime;
 const args_mod = @import("args.zig");
 const config_mod = @import("config.zig");
 const output_mod = @import("output.zig");
@@ -30,6 +30,7 @@ pub const CmdError = client_mod.ClientError || config_mod.ConfigError || error{
     AssetNotFound,
     CommandFailed,
     InvalidFlag,
+    BrokenPipe,
 };
 
 var stream_shutdown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
@@ -40,6 +41,28 @@ fn makeClient(allocator: std.mem.Allocator, config: Config) Client {
         .mainnet => Client.mainnet(allocator),
         .testnet => Client.testnet(allocator),
     };
+}
+
+fn stdoutWriteAll(io: std.Io, data: []const u8) void {
+    std.Io.File.stdout().writeStreamingAll(io, data) catch {};
+}
+
+fn stderrWriteAll(io: std.Io, data: []const u8) void {
+    std.Io.File.stderr().writeStreamingAll(io, data) catch {};
+}
+
+fn stderrWriteAllSimple(data: []const u8) void {
+    stderrWriteAll(runtime.io(), data);
+}
+
+fn stdinReadAll(buf: []u8) usize {
+    var len: usize = 0;
+    while (len < buf.len) {
+        const n = std.posix.read(std.posix.STDIN_FILENO, buf[len..]) catch break;
+        if (n == 0) break;
+        len += n;
+    }
+    return len;
 }
 
 const ListW = @import("List");
@@ -66,8 +89,8 @@ fn runListView(
     list.help = opts.help;
     list.on_render_cell = opts.on_render_cell;
 
-    var app = App.init(opts.allocator) catch {
-        std.fs.File.stderr().writeAll("error: requires an interactive terminal\n") catch {};
+    var app = App.init(opts.allocator, runtime.io()) catch {
+        stderrWriteAllSimple("error: requires an interactive terminal\n");
         return error.CommandFailed;
     };
     defer app.deinit();
@@ -87,8 +110,8 @@ fn runListView(
                         if (list.selectedIndex()) |idx| {
                             app.deinit();
                             cb(opts.allocator, opts.config, items, idx);
-                            app = App.init(opts.allocator) catch {
-                                std.fs.File.stderr().writeAll("error: failed to restore terminal\n") catch {};
+                            app = App.init(opts.allocator, runtime.io()) catch {
+                                stderrWriteAllSimple("error: failed to restore terminal\n");
                                 return error.CommandFailed;
                             };
                             app.setTickMs(100);
@@ -137,7 +160,7 @@ fn getWriteAuth(w: *Writer, config: Config) CmdError!WriteAuth {
 }
 
 pub fn keys(allocator: std.mem.Allocator, w: *Writer, a: args_mod.KeysArgs) !void {
-    const password = a.password orelse std.posix.getenv("HL_PASSWORD") orelse {
+    const password = a.password orelse runtime.getenv("HL_PASSWORD") orelse {
         // For ls, no password needed
         if (a.action == .ls) return keysLs(allocator, w);
         if (a.action == .rm) return keysRm(w, a.name orelse {
@@ -161,7 +184,9 @@ pub fn keys(allocator: std.mem.Allocator, w: *Writer, a: args_mod.KeysArgs) !voi
             };
             // Generate random 32-byte private key
             var priv: [32]u8 = undefined;
-            std.crypto.random.bytes(&priv);
+            runtime.fillRandomSecure(&priv) catch |e| {
+                return failFmt(w, "keygen: {s}", .{@errorName(e)});
+            };
             const json = keystore.encrypt(allocator, priv, password) catch |e| {
                 return failFmt(w, "encrypt: {s}", .{@errorName(e)});
             };
@@ -193,7 +218,7 @@ pub fn keys(allocator: std.mem.Allocator, w: *Writer, a: args_mod.KeysArgs) !voi
                 try w.err("usage: hlz keys import <name> --private-key <HEX> --password <PASS>");
                 return error.MissingArgument;
             };
-            const hex = a.key_hex orelse std.posix.getenv("HL_KEY") orelse {
+            const hex = a.key_hex orelse runtime.getenv("HL_KEY") orelse {
                 try w.err("provide key: --private-key <HEX> or HL_KEY env");
                 return error.MissingKey;
             };
@@ -291,7 +316,10 @@ fn keysLs(allocator: std.mem.Allocator, w: *Writer) !void {
         jbuf[0] = '[';
         jlen = 1;
         for (entries, 0..) |e, i| {
-            if (i > 0) { jbuf[jlen] = ','; jlen += 1; }
+            if (i > 0) {
+                jbuf[jlen] = ',';
+                jlen += 1;
+            }
             jlen += (std.fmt.bufPrint(jbuf[jlen..], "{{\"name\":\"{s}\",\"address\":\"{s}\",\"default\":{s}}}", .{
                 e.getName(), e.address, if (e.is_default) "true" else "false",
             }) catch break).len;
@@ -329,14 +357,16 @@ fn keysRm(w: *Writer, name: []const u8) !void {
 
 fn keysDefault(w: *Writer, name: []const u8) !void {
     // Verify key exists
-    const home = std.posix.getenv("HOME") orelse "";
+    const home = runtime.getenv("HOME") orelse "";
     var pbuf: [576]u8 = undefined;
     const kpath = std.fmt.bufPrint(&pbuf, "{s}/.hl/keys/{s}.json", .{ home, name }) catch {
         return failFmt(w, "key \"{s}\" not found", .{name});
     };
-    std.fs.cwd().access(kpath, .{}) catch {
-        return failFmt(w, "key \"{s}\" not found", .{name});
-    };
+    {
+        std.Io.Dir.cwd().access(runtime.io(), kpath, .{}) catch {
+            return failFmt(w, "key \"{s}\" not found", .{name});
+        };
+    }
     keystore.setDefault(name) catch {
         return fail(w, "failed to set default");
     };
@@ -358,9 +388,12 @@ pub fn approveAgent(allocator: std.mem.Allocator, w: *Writer, config: Config, a:
         return error.MissingArgument;
     };
     const auth = try getWriteAuth(w, config);
-    var client = switch (config.chain) { .mainnet => Client.mainnet(allocator), .testnet => Client.testnet(allocator) };
+    var client = switch (config.chain) {
+        .mainnet => Client.mainnet(allocator),
+        .testnet => Client.testnet(allocator),
+    };
     defer client.deinit();
-    const nonce = @as(u64, @intCast(std.time.milliTimestamp()));
+    const nonce = runtime.nonceMs();
     const addr = Client.parseAddress(agent_addr) catch {
         try w.err("invalid agent address");
         return;
@@ -468,7 +501,10 @@ pub fn mids(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_mo
         } else null;
         entries[total] = .{
             .coin = key,
-            .mid = switch (entry.value_ptr.*) { .string => |s| s, else => "?" },
+            .mid = switch (entry.value_ptr.*) {
+                .string => |s| s,
+                else => "?",
+            },
             .resolved = resolved,
         };
         total += 1;
@@ -485,8 +521,13 @@ pub fn mids(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_mo
         var first = true;
         for (entries[0..total]) |e| {
             const display = e.resolved orelse e.coin;
-            if (a.coin) |f| { if (!containsInsensitive(display, f)) continue; }
-            if (!first) { jbuf[jlen] = ','; jlen += 1; }
+            if (a.coin) |f| {
+                if (!containsInsensitive(display, f)) continue;
+            }
+            if (!first) {
+                jbuf[jlen] = ',';
+                jlen += 1;
+            }
             jlen += (std.fmt.bufPrint(jbuf[jlen..], "\"{s}\":\"{s}\"", .{ display, e.mid }) catch return error.Overflow).len;
             first = false;
         }
@@ -510,7 +551,9 @@ pub fn mids(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_mo
     var filtered: usize = 0;
     for (entries[0..total]) |e| {
         const display = e.resolved orelse e.coin;
-        if (a.coin) |f| { if (!containsInsensitive(display, f)) continue; }
+        if (a.coin) |f| {
+            if (!containsInsensitive(display, f)) continue;
+        }
         entries[filtered] = e;
         filtered += 1;
     }
@@ -980,15 +1023,22 @@ pub fn perps(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_m
     const limit = if (a.all) universe.len else per_page;
 
     for (universe) |pm| {
-        if (a.filter) |f| { if (!containsInsensitive(pm.name, f)) continue; }
+        if (a.filter) |f| {
+            if (!containsInsensitive(pm.name, f)) continue;
+        }
         total += 1;
     }
 
     for (universe) |pm| {
         if (shown >= limit) break;
         const m = pm;
-        if (a.filter) |f| { if (!containsInsensitive(m.name, f)) continue; }
-        if (skipped < start) { skipped += 1; continue; }
+        if (a.filter) |f| {
+            if (!containsInsensitive(m.name, f)) continue;
+        }
+        if (skipped < start) {
+            skipped += 1;
+            continue;
+        }
         var lev_buf: [16]u8 = undefined;
         var dec_buf: [8]u8 = undefined;
         const cols = [_]Column{
@@ -1134,7 +1184,9 @@ pub fn spotMarkets(allocator: std.mem.Allocator, w: *Writer, config: Config, a: 
 
     var total: usize = 0;
     for (tokens) |t| {
-        if (a.filter) |f| { if (!containsInsensitive(t.name, f)) continue; }
+        if (a.filter) |f| {
+            if (!containsInsensitive(t.name, f)) continue;
+        }
         total += 1;
     }
 
@@ -1142,8 +1194,13 @@ pub fn spotMarkets(allocator: std.mem.Allocator, w: *Writer, config: Config, a: 
     var skipped: usize = 0;
     for (tokens) |t| {
         if (shown >= limit) break;
-        if (a.filter) |f| { if (!containsInsensitive(t.name, f)) continue; }
-        if (skipped < start) { skipped += 1; continue; }
+        if (a.filter) |f| {
+            if (!containsInsensitive(t.name, f)) continue;
+        }
+        if (skipped < start) {
+            skipped += 1;
+            continue;
+        }
         var idx_buf: [8]u8 = undefined;
         var sz_buf: [8]u8 = undefined;
         var wei_buf: [8]u8 = undefined;
@@ -1208,7 +1265,10 @@ pub fn outcomes(allocator: std.mem.Allocator, w: *Writer, config: Config, a: arg
         if (a.filter) |f| {
             if (!containsInsensitive(o.name, f) and !containsInsensitive(o.description, f)) continue;
         }
-        if (skipped < start) { skipped += 1; continue; }
+        if (skipped < start) {
+            skipped += 1;
+            continue;
+        }
         var id_buf: [8]u8 = undefined;
         var sides_buf: [64]u8 = undefined;
         const sides_len = formatOutcomeSides(o.sideSpecs, &sides_buf);
@@ -1445,7 +1505,7 @@ pub fn placeOrder(allocator: std.mem.Allocator, w: *Writer, config: Config, a: a
         }
     }
 
-    const now: u64 = @intCast(std.time.milliTimestamp());
+    const now: u64 = runtime.nonceMs();
     var cloid = types.ZERO_CLOID;
     cloid[0] = @intCast((now >> 56) & 0xff);
     cloid[1] = @intCast((now >> 48) & 0xff);
@@ -1565,8 +1625,14 @@ pub fn placeOrder(allocator: std.mem.Allocator, w: *Writer, config: Config, a: a
                 try w.print(" avg={s}\n", .{decStr(f.avgPx, &avg_buf)});
             },
             .success => try w.success("accepted"),
-            .@"error" => |msg| { try w.failFmt("rejected: {s}", .{msg}); failed = true; },
-            .unknown => { try w.fail("unknown response"); failed = true; },
+            .@"error" => |msg| {
+                try w.failFmt("rejected: {s}", .{msg});
+                failed = true;
+            },
+            .unknown => {
+                try w.fail("unknown response");
+                failed = true;
+            },
         }
     } else {
         const status = response.parseResponseStatus(val);
@@ -1787,10 +1853,16 @@ pub fn cancelOrder(allocator: std.mem.Allocator, w: *Writer, config: Config, a: 
     if (statuses.len > 0) {
         switch (statuses[0]) {
             .success => try w.success("Order cancelled"),
-            .@"error" => |msg| { return failFmt(w, "cancel failed: {s}", .{msg}); },
+            .@"error" => |msg| {
+                return failFmt(w, "cancel failed: {s}", .{msg});
+            },
             else => {
                 const ok = try result.isOk();
-                if (ok) { try w.success("Cancel submitted"); } else { return fail(w, "cancel failed"); }
+                if (ok) {
+                    try w.success("Cancel submitted");
+                } else {
+                    return fail(w, "cancel failed");
+                }
             },
         }
     } else {
@@ -1810,7 +1882,7 @@ pub fn sendAsset(allocator: std.mem.Allocator, w: *Writer, config: Config, a: ar
     defer client.deinit();
 
     const auth = try getWriteAuth(w, config);
-    const now: u64 = @intCast(std.time.milliTimestamp());
+    const now: u64 = runtime.nonceMs();
 
     const is_usdc = std.ascii.eqlIgnoreCase(a.token, "USDC");
     const is_simple = is_usdc and std.mem.eql(u8, a.from, "perp") and std.mem.eql(u8, a.to, "perp") and a.subaccount == null;
@@ -1879,7 +1951,7 @@ pub fn modifyOrder(allocator: std.mem.Allocator, w: *Writer, config: Config, a: 
     const sz = Decimal.fromString(a.size) catch return error.Overflow;
     const px = Decimal.fromString(a.price) catch return error.Overflow;
 
-    const now: u64 = @intCast(std.time.milliTimestamp());
+    const now: u64 = runtime.nonceMs();
     var cloid = types.ZERO_CLOID;
     cloid[0] = @intCast((now >> 56) & 0xff);
     cloid[1] = @intCast((now >> 48) & 0xff);
@@ -1927,10 +1999,18 @@ pub fn modifyOrder(allocator: std.mem.Allocator, w: *Writer, config: Config, a: 
                 try w.print(" (oid: {s})\n", .{std.fmt.bufPrint(&oid_buf, "{d}", .{r.oid}) catch "?"});
             },
             .success => try w.success("Order modified"),
-            .@"error" => |msg| { try w.failFmt("modify rejected: {s}", .{msg}); failed = true; },
+            .@"error" => |msg| {
+                try w.failFmt("modify rejected: {s}", .{msg});
+                failed = true;
+            },
             else => {
                 const ok = try result.isOk();
-                if (ok) { try w.success("Modify submitted"); } else { try w.fail("modify failed"); failed = true; }
+                if (ok) {
+                    try w.success("Modify submitted");
+                } else {
+                    try w.fail("modify failed");
+                    failed = true;
+                }
             },
         }
     } else {
@@ -1976,7 +2056,7 @@ pub fn funding(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args
     var client = makeClient(allocator, config);
     defer client.deinit();
 
-    var mac = try client.getMetaAndAssetCtxs(null);
+    var mac = try client.getMetaAndAssetCtxs(a.dex);
     defer mac.deinit();
 
     var sorted = try parseFundingData(allocator, mac.entries);
@@ -2010,9 +2090,13 @@ pub fn funding(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args
         jbuf[0] = '[';
         jlen = 1;
         for (show_slice, 0..) |e, i| {
-            if (i > 0) { jbuf[jlen] = ','; jlen += 1; }
+            if (i > 0) {
+                jbuf[jlen] = ',';
+                jlen += 1;
+            }
             var mark_buf: [32]u8 = undefined;
-            jlen += (std.fmt.bufPrint(jbuf[jlen..],
+            jlen += (std.fmt.bufPrint(
+                jbuf[jlen..],
                 "{{\"coin\":\"{s}\",\"funding\":{d:.8},\"annualized\":{d:.2},\"mark\":\"{s}\"}}",
                 .{ e.name, e.funding, e.funding * 8760.0 * 100.0, decFmt(e.mark, &mark_buf) },
             ) catch return error.Overflow).len;
@@ -2029,7 +2113,8 @@ pub fn funding(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args
 
     try w.heading("FUNDING RATES (hourly)");
 
-    const stdout = std.fs.File.stdout();
+    const stdout = std.Io.File.stdout();
+    const io = w.io;
     const is_tty = w.is_tty;
 
     {
@@ -2044,7 +2129,7 @@ pub fn funding(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args
         p = lpad(&buf, p, "MARK", 12);
         if (is_tty) p = emit(&buf, p, Style.reset);
         p = emit(&buf, p, "\r\n");
-        stdout.writeAll(buf[0..p]) catch {};
+        stdout.writeStreamingAll(io, buf[0..p]) catch {};
     }
 
     var max_rate: f64 = 0;
@@ -2084,7 +2169,7 @@ pub fn funding(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args
         p = lpad(&buf, p, decFmt(e.mark, &mark_buf2), 12);
         if (is_tty) p = emit(&buf, p, Style.reset);
         p = emit(&buf, p, "\r\n");
-        stdout.writeAll(buf[0..p]) catch {};
+        stdout.writeStreamingAll(io, buf[0..p]) catch {};
     }
     if (!a.all and end < total_count) try w.paginatePage(end - start, total_count, page, pages);
     try w.footer();
@@ -2322,7 +2407,8 @@ fn bookStatic(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_
     const title = std.fmt.bufPrint(&title_buf, "{s} ORDER BOOK", .{coin}) catch "ORDER BOOK";
     try w.heading(title);
 
-    const stdout = std.fs.File.stdout();
+    const stdout = std.Io.File.stdout();
+    const io = w.io;
     const is_tty = w.is_tty;
 
     const px_w: usize = 10;
@@ -2341,7 +2427,7 @@ fn bookStatic(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_
         p = rpad(&buf, p, "DEPTH", bar_w);
         if (is_tty) p = emit(&buf, p, Style.reset);
         p = emit(&buf, p, "\r\n");
-        stdout.writeAll(buf[0..p]) catch {};
+        stdout.writeStreamingAll(io, buf[0..p]) catch {};
     }
 
     var ri: usize = depth;
@@ -2368,7 +2454,7 @@ fn bookStatic(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_
         p = spaces(&buf, p, fill);
         if (is_tty) p = emit(&buf, p, Style.reset);
         p = emit(&buf, p, "\r\n");
-        stdout.writeAll(buf[0..p]) catch {};
+        stdout.writeStreamingAll(io, buf[0..p]) catch {};
     }
 
     if (depth > 0) {
@@ -2392,7 +2478,7 @@ fn bookStatic(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_
         p += ss.len;
         if (is_tty) p = emit(&buf, p, Style.reset);
         p = emit(&buf, p, "\r\n");
-        stdout.writeAll(buf[0..p]) catch {};
+        stdout.writeStreamingAll(io, buf[0..p]) catch {};
     }
 
     for (0..depth) |i| {
@@ -2417,7 +2503,7 @@ fn bookStatic(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_
         p = spaces(&buf, p, fill);
         if (is_tty) p = emit(&buf, p, Style.reset);
         p = emit(&buf, p, "\r\n");
-        stdout.writeAll(buf[0..p]) catch {};
+        stdout.writeStreamingAll(io, buf[0..p]) catch {};
     }
 
     try w.footer();
@@ -2496,7 +2582,7 @@ fn rpad(buf: []u8, pos: usize, text: []const u8, width: usize) usize {
     @memcpy(buf[p..][0..tlen], text[0..tlen]);
     p += tlen;
     if (width > tlen) {
-        @memset(buf[p..][0..width - tlen], ' ');
+        @memset(buf[p..][0 .. width - tlen], ' ');
         p += width - tlen;
     }
     return p;
@@ -2515,7 +2601,6 @@ fn lpad(buf: []u8, pos: usize, text: []const u8, width: usize) usize {
 }
 
 fn bookLive(allocator: std.mem.Allocator, config: Config, a: args_mod.BookArgs) !void {
-
     var coin_upper: [16]u8 = undefined;
     var spot_idx_buf: [16]u8 = undefined;
     const coin = if (std.mem.indexOf(u8, a.coin, "/") != null)
@@ -2526,7 +2611,7 @@ fn bookLive(allocator: std.mem.Allocator, config: Config, a: args_mod.BookArgs) 
     var client = makeClient(allocator, config);
     defer client.deinit();
 
-    var app = App.init(allocator) catch return error.Overflow;
+    var app = App.init(allocator, runtime.io()) catch return error.Overflow;
     defer app.deinit();
     app.setTickMs(150);
 
@@ -2550,8 +2635,12 @@ fn bookLive(allocator: std.mem.Allocator, config: Config, a: args_mod.BookArgs) 
             app.endFrame();
             app.tick();
             if (app.pollKey()) |key| switch (key) {
-                .char => |c| if (c == 'q') { app.running = false; },
-                .esc => { app.running = false; },
+                .char => |c| if (c == 'q') {
+                    app.running = false;
+                },
+                .esc => {
+                    app.running = false;
+                },
                 else => {},
             };
             continue;
@@ -2819,11 +2908,10 @@ pub fn stream(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_
     };
 
     const is_json = w.format == .json or !w.is_tty;
-    const stdout = std.fs.File.stdout();
+    const io = w.io;
 
     if (!is_json) {
-        const stderr = std.fs.File.stderr();
-        stderr.writeAll("Connecting...\r\n") catch {};
+        stderrWriteAll(io, "Connecting...\r\n");
     }
 
     var conn = WsConnection.connect(std.heap.page_allocator, config.chain) catch |e| {
@@ -2836,14 +2924,13 @@ pub fn stream(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_
     };
 
     if (!is_json) {
-        const stderr = std.fs.File.stderr();
-        stderr.writeAll("Subscribed \xe2\x9c\x93  (Ctrl+C to quit)\r\n") catch {};
+        stderrWriteAll(io, "Subscribed \xe2\x9c\x93  (Ctrl+C to quit)\r\n");
     }
 
     stream_shutdown.store(false, .release);
     stream_socket_fd.store(conn.socket_fd, .release);
     const S = struct {
-        fn handler(_: c_int) callconv(.c) void {
+        fn handler(_: posix.SIG) callconv(.c) void {
             stream_shutdown.store(true, .release);
             const fd = stream_socket_fd.load(.acquire);
             if (fd != -1) {
@@ -2862,13 +2949,12 @@ pub fn stream(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_
     while (!stream_shutdown.load(.acquire)) {
         const event = conn.next() catch |e| {
             if (!is_json) {
-                const stderr = std.fs.File.stderr();
                 if (e == error.EndOfStream) {
-                    stderr.writeAll("Server closed connection (bad subscription?)\r\n") catch {};
+                    stderrWriteAll(io, "Server closed connection (bad subscription?)\r\n");
                 } else {
                     var err_buf: [256]u8 = undefined;
                     const err_msg = std.fmt.bufPrint(&err_buf, "Connection error: {s}\r\n", .{@errorName(e)}) catch "Connection error\r\n";
-                    stderr.writeAll(err_msg) catch {};
+                    stderrWriteAll(io, err_msg);
                 }
             }
             return;
@@ -2878,8 +2964,7 @@ pub fn stream(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_
             .timeout => continue,
             .closed => {
                 if (!is_json) {
-                    const stderr = std.fs.File.stderr();
-                    stderr.writeAll("Connection closed\r\n") catch {};
+                    stderrWriteAll(io, "Connection closed\r\n");
                 }
                 return;
             },
@@ -2887,23 +2972,22 @@ pub fn stream(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_
                 if (msg.channel == .subscriptionResponse) continue;
 
                 if (is_json) {
-                    stdout.writeAll(msg.raw_json) catch return;
-                    stdout.writeAll("\n") catch return;
+                    stdoutWriteAll(io, msg.raw_json);
+                    stdoutWriteAll(io, "\n");
                     continue;
                 }
 
-                streamPretty(stdout, a.kind, msg.raw_json);
+                streamPretty(io, a.kind, msg.raw_json);
             },
         }
     }
 
     if (!is_json) {
-        const stderr = std.fs.File.stderr();
-        stderr.writeAll("\r\n") catch {};
+        stderrWriteAll(io, "\r\n");
     }
 }
 
-fn streamPretty(stdout: std.fs.File, kind: args_mod.StreamKind, text: []const u8) void {
+fn streamPretty(io: std.Io, kind: args_mod.StreamKind, text: []const u8) void {
     const channel = ws_types.parseChannel(text);
     const data_slice = ws_types.extractData(text);
 
@@ -2916,17 +3000,17 @@ fn streamPretty(stdout: std.fs.File, kind: args_mod.StreamKind, text: []const u8
     _ = data_slice;
 
     switch (kind) {
-        .trades => streamTradesPretty(stdout, text),
-        .bbo => streamBboPretty(stdout, text),
-        .candles => streamCandlePretty(stdout, text),
+        .trades => streamTradesPretty(io, text),
+        .bbo => streamBboPretty(io, text),
+        .candles => streamCandlePretty(io, text),
         else => {
-            stdout.writeAll(text) catch {};
-            stdout.writeAll("\r\n") catch {};
+            stdoutWriteAll(io, text);
+            stdoutWriteAll(io, "\r\n");
         },
     }
 }
 
-fn streamTradesPretty(stdout: std.fs.File, text: []const u8) void {
+fn streamTradesPretty(io: std.Io, text: []const u8) void {
     const data_start = std.mem.indexOf(u8, text, "\"data\"") orelse return;
     const arr_start = std.mem.indexOfPos(u8, text, data_start, "[") orelse return;
     var pos = arr_start;
@@ -2971,13 +3055,13 @@ fn streamTradesPretty(stdout: std.fs.File, text: []const u8) void {
             p = emit(&buf, p, Style.reset);
         }
         p = emit(&buf, p, "\r\n");
-        stdout.writeAll(buf[0..p]) catch {};
+        stdoutWriteAll(io, buf[0..p]);
 
         pos = obj_end + 1;
     }
 }
 
-fn streamBboPretty(stdout: std.fs.File, text: []const u8) void {
+fn streamBboPretty(io: std.Io, text: []const u8) void {
     const coin = jsonFieldStr(text, "coin") orelse "?";
 
     const bbo_marker = std.mem.indexOf(u8, text, "\"bbo\":[") orelse return;
@@ -3016,10 +3100,10 @@ fn streamBboPretty(stdout: std.fs.File, text: []const u8) void {
     p = lpad(&buf, p, ask_px, 10);
     p = emit(&buf, p, Style.reset);
     p = emit(&buf, p, "\r\n");
-    stdout.writeAll(buf[0..p]) catch {};
+    stdoutWriteAll(io, buf[0..p]);
 }
 
-fn streamCandlePretty(stdout: std.fs.File, text: []const u8) void {
+fn streamCandlePretty(io: std.Io, text: []const u8) void {
     const data_start = std.mem.indexOf(u8, text, "\"data\"") orelse return;
     const obj_start = std.mem.indexOfPos(u8, text, data_start, "{") orelse return;
     const obj_end = std.mem.lastIndexOf(u8, text, "}") orelse return;
@@ -3056,7 +3140,7 @@ fn streamCandlePretty(stdout: std.fs.File, text: []const u8) void {
     p = emit(&buf, p, vol);
     p = emit(&buf, p, Style.reset);
     p = emit(&buf, p, "\r\n");
-    stdout.writeAll(buf[0..p]) catch {};
+    stdoutWriteAll(io, buf[0..p]);
 }
 
 /// Quick JSON string field extractor (no allocations, returns slice into input).
@@ -3108,7 +3192,6 @@ fn containsInsensitive(haystack: []const u8, needle: []const u8) bool {
 }
 
 pub fn markets(allocator: std.mem.Allocator, config: Config) !void {
-
     var client = makeClient(allocator, config);
     defer client.deinit();
 
@@ -3356,8 +3439,12 @@ pub fn price(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_m
             jbuf[0] = '[';
             jlen = 1;
             for (results[0..n_results], 0..) |r, i| {
-                if (i > 0) { jbuf[jlen] = ','; jlen += 1; }
-                jlen += (std.fmt.bufPrint(jbuf[jlen..],
+                if (i > 0) {
+                    jbuf[jlen] = ',';
+                    jlen += 1;
+                }
+                jlen += (std.fmt.bufPrint(
+                    jbuf[jlen..],
                     "{{\"market\":\"{s}\",\"type\":\"{s}\",\"venue\":\"{s}\",\"price\":{s}}}",
                     .{ r.market, r.kind, r.venue, r.mid },
                 ) catch return error.Overflow).len;
@@ -3368,7 +3455,8 @@ pub fn price(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_m
         } else {
             const r = results[0];
             var jbuf: [256]u8 = undefined;
-            const jlen = (std.fmt.bufPrint(&jbuf,
+            const jlen = (std.fmt.bufPrint(
+                &jbuf,
                 "{{\"coin\":\"{s}\",\"mid\":{s}}}",
                 .{ r.market, r.mid },
             ) catch return error.Overflow).len;
@@ -3464,7 +3552,7 @@ pub fn setLeverage(allocator: std.mem.Allocator, w: *Writer, config: Config, a: 
     // Set leverage
     const auth = try getWriteAuth(w, config);
     const lev = std.fmt.parseInt(u32, a.leverage.?, 10) catch return error.InvalidFlag;
-    const nonce: u64 = @intCast(std.time.milliTimestamp());
+    const nonce: u64 = runtime.nonceMs();
 
     const ul = types.UpdateLeverage{
         .asset = asset,
@@ -3681,9 +3769,18 @@ pub fn referralCmd(allocator: std.mem.Allocator, w: *Writer, config: Config, a: 
                 try w.print("referred by   {s}\n", .{r})
             else
                 try w.print("referred by   (none)\n", .{});
-            if (ref.cumVlm) |v| { var b: [32]u8 = undefined; try w.print("referral vol  ${s}\n", .{decFmt(v, &b)}); }
-            if (ref.unclaimedRewards) |v| { var b: [32]u8 = undefined; try w.print("unclaimed     ${s}\n", .{decFmt(v, &b)}); }
-            if (ref.claimedRewards) |v| { var b: [32]u8 = undefined; try w.print("claimed       ${s}\n", .{decFmt(v, &b)}); }
+            if (ref.cumVlm) |v| {
+                var b: [32]u8 = undefined;
+                try w.print("referral vol  ${s}\n", .{decFmt(v, &b)});
+            }
+            if (ref.unclaimedRewards) |v| {
+                var b: [32]u8 = undefined;
+                try w.print("unclaimed     ${s}\n", .{decFmt(v, &b)});
+            }
+            if (ref.claimedRewards) |v| {
+                var b: [32]u8 = undefined;
+                try w.print("claimed       ${s}\n", .{decFmt(v, &b)});
+            }
         },
         .set => {
             const code = a.code orelse {
@@ -3691,7 +3788,7 @@ pub fn referralCmd(allocator: std.mem.Allocator, w: *Writer, config: Config, a: 
                 return error.MissingArgument;
             };
             const auth = try getWriteAuth(w, config);
-            const nonce: u64 = @intCast(std.time.milliTimestamp());
+            const nonce: u64 = runtime.nonceMs();
             var result = try client.setReferrer(auth.signer, .{ .code = code }, nonce, null, null);
             defer result.deinit();
 
@@ -3838,14 +3935,14 @@ pub fn twap(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_mo
             });
         } else {
             try w.print("  [{d}/{d}] filled {s} @ {s}  (total: {s})\n", .{
-                i + 1, slices, smartFmt(&sz_buf, slice_filled), smartFmt(&px_buf, slice_px),
+                i + 1,                     slices, smartFmt(&sz_buf, slice_filled), smartFmt(&px_buf, slice_px),
                 smartFmt(&px_buf, filled),
             });
         }
 
         // Sleep between slices (except after last)
         if (i + 1 < slices) {
-            std.Thread.sleep(interval_ms * std.time.ns_per_ms);
+            try runtime.sleepNs(interval_ms * std.time.ns_per_ms);
         }
     }
 
@@ -3886,7 +3983,7 @@ fn parseDuration(s: []const u8) ?u64 {
 }
 
 fn makeCloid() types.Cloid {
-    const now: u64 = @intCast(std.time.milliTimestamp());
+    const now: u64 = runtime.nonceMs();
     var cloid = types.ZERO_CLOID;
     cloid[0] = @intCast((now >> 56) & 0xff);
     cloid[1] = @intCast((now >> 48) & 0xff);
@@ -3908,7 +4005,7 @@ pub fn batchCmd(allocator: std.mem.Allocator, w: *Writer, config: Config, a: arg
     var effective = a;
 
     if (a.stdin) {
-        stdin_len = std.fs.File.stdin().readAll(&stdin_storage) catch 0;
+        stdin_len = stdinReadAll(&stdin_storage);
         if (stdin_len > 0) {
             const input = std.mem.trim(u8, stdin_storage[0..stdin_len], " \t\r\n");
             if (input.len > 0 and input[0] == '[') {
@@ -4115,7 +4212,7 @@ pub fn withdrawCmd(allocator: std.mem.Allocator, w: *Writer, config: Config, a: 
     defer client.deinit();
 
     const auth = try getWriteAuth(w, config);
-    const now: u64 = @intCast(std.time.milliTimestamp());
+    const now: u64 = runtime.nonceMs();
     const dest_str = a.destination orelse auth.address();
     const dest = Client.parseAddress(dest_str) catch {
         try w.err("invalid destination address");

@@ -4,7 +4,9 @@
 
 const std = @import("std");
 const args_mod = @import("args.zig");
-const Decimal = @import("hlz").math.decimal.Decimal;
+const hlz = @import("hlz");
+const Decimal = hlz.math.decimal.Decimal;
+const runtime = hlz.runtime;
 
 const OutputFormat = args_mod.OutputFormat;
 
@@ -35,49 +37,51 @@ pub const Style = struct {
 };
 
 pub const Writer = struct {
+    io: std.Io,
     is_tty: bool,
     format: OutputFormat,
     quiet: bool = false,
     cmd: []const u8 = "",
-    start_ns: i128 = 0,
+    start_ns: i96 = 0,
     exit_msg: [256]u8 = undefined,
     exit_len: usize = 0,
 
-    pub fn init(format: OutputFormat) Writer {
-        const is_tty = std.posix.isatty(std.fs.File.stdout().handle) and !noColor();
-        return .{ .is_tty = is_tty, .format = format };
+    pub fn init(io: std.Io, format: OutputFormat) Writer {
+        const raw_tty = std.Io.File.stdout().isTty(io) catch false;
+        const is_tty = raw_tty and !noColor();
+        return .{ .io = io, .is_tty = is_tty, .format = format };
     }
 
-    pub fn initAuto(format: OutputFormat, explicit: bool) Writer {
-        const raw_tty = std.posix.isatty(std.fs.File.stdout().handle);
+    pub fn initAuto(io: std.Io, format: OutputFormat, explicit: bool) Writer {
+        const raw_tty = std.Io.File.stdout().isTty(io) catch false;
         const is_tty = raw_tty and !noColor();
         const effective = if (!raw_tty and !explicit and format == .pretty) .json else format;
-        return .{ .is_tty = is_tty, .format = effective };
+        return .{ .io = io, .is_tty = is_tty, .format = effective };
     }
 
     fn noColor() bool {
-        return std.posix.getenv("NO_COLOR") != null;
+        return runtime.getenv("NO_COLOR") != null;
     }
 
     fn out(self: *Writer, data: []const u8) !void {
         if (!self.is_tty) {
-            std.fs.File.stdout().writeAll(data) catch return error.BrokenPipe;
+            std.Io.File.stdout().writeStreamingAll(self.io, data) catch return error.BrokenPipe;
             return;
         }
-        const stdout = std.fs.File.stdout();
+        const stdout = std.Io.File.stdout();
         var start: usize = 0;
         for (data, 0..) |byte, i| {
             if (byte == '\n') {
-                if (i > start) stdout.writeAll(data[start..i]) catch return error.BrokenPipe;
-                stdout.writeAll("\r\n") catch return error.BrokenPipe;
+                if (i > start) stdout.writeStreamingAll(self.io, data[start..i]) catch return error.BrokenPipe;
+                stdout.writeStreamingAll(self.io, "\r\n") catch return error.BrokenPipe;
                 start = i + 1;
             }
         }
-        if (start < data.len) stdout.writeAll(data[start..]) catch return error.BrokenPipe;
+        if (start < data.len) stdout.writeStreamingAll(self.io, data[start..]) catch return error.BrokenPipe;
     }
 
-    fn ew(_: *Writer, data: []const u8) !void {
-        std.fs.File.stderr().writeAll(data) catch return error.BrokenPipe;
+    fn ew(self: *Writer, data: []const u8) !void {
+        std.Io.File.stderr().writeStreamingAll(self.io, data) catch return error.BrokenPipe;
     }
 
     pub fn style(self: *Writer, s: []const u8) !void {
@@ -282,7 +286,7 @@ pub const Writer = struct {
 
     pub fn elapsedMs(self: *Writer) u64 {
         if (self.start_ns == 0) return 0;
-        const now = std.time.nanoTimestamp();
+        const now = std.Io.Clock.awake.now(self.io).toNanoseconds();
         const delta = now - self.start_ns;
         return if (delta > 0) @intCast(@divFloor(delta, 1_000_000)) else 0;
     }

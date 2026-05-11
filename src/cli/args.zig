@@ -191,6 +191,7 @@ pub const FundingArgs = struct {
     all: bool = false,
     page: usize = 1,
     filter: ?[]const u8 = null,
+    dex: ?[]const u8 = null,
 };
 
 pub const TradeArgs = struct {
@@ -372,8 +373,8 @@ pub const ParseError = error{
     InvalidFlag,
 };
 
-pub fn parse(allocator: std.mem.Allocator) ParseError!ParseResult {
-    var args_iter = std.process.argsWithAllocator(allocator) catch return .{ .command = .{ .help = {} }, .flags = .{} };
+pub fn parse(allocator: std.mem.Allocator, args: std.process.Args) ParseError!ParseResult {
+    var args_iter = args.iterateAllocator(allocator) catch return .{ .command = .{ .help = {} }, .flags = .{} };
     defer args_iter.deinit();
 
     _ = args_iter.next(); // skip binary name
@@ -659,6 +660,9 @@ fn parseFunding(args: []const []const u8) FundingArgs {
         } else if (std.mem.eql(u8, args[i], "--filter") and i + 1 < args.len) {
             i += 1;
             result.filter = args[i];
+        } else if (std.mem.eql(u8, args[i], "--dex") and i + 1 < args.len) {
+            i += 1;
+            result.dex = args[i];
         } else if (!std.mem.startsWith(u8, args[i], "--")) {
             result.filter = args[i]; // positional = filter
         }

@@ -7,6 +7,7 @@ const config_mod = @import("config.zig");
 const output_mod = @import("output.zig");
 const commands = @import("commands.zig");
 const trade_mod = @import("trade");
+const runtime = @import("hlz").runtime;
 
 const Style = output_mod.Style;
 const VERSION = "0.5.4";
@@ -18,13 +19,13 @@ const EXIT_USAGE: u8 = 2;
 const EXIT_AUTH: u8 = 3;
 const EXIT_NETWORK: u8 = 4;
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    runtime.installIo(init.io);
+    runtime.installEnvironMap(init.environ_map);
+    const allocator = init.gpa;
 
-    const result = args_mod.parse(allocator) catch |e| {
-        var w = output_mod.Writer.init(.pretty);
+    const result = args_mod.parse(allocator, init.minimal.args) catch |e| {
+        var w = output_mod.Writer.init(init.io, .pretty);
         switch (e) {
             error.MissingArgument => try w.err("missing required argument. Run `hlz help` for usage."),
             error.UnknownCommand => try w.err("unknown command. Run `hlz help` for usage."),
@@ -47,7 +48,7 @@ pub fn main() !void {
         effective_explicit = true;
     }
 
-    var w = output_mod.Writer.initAuto(effective_output, effective_explicit);
+    var w = output_mod.Writer.initAuto(init.io, effective_output, effective_explicit);
     w.quiet = flags.quiet;
 
     const cmd = result.command orelse {
@@ -63,7 +64,7 @@ pub fn main() !void {
     };
     if (w.format == .json) {
         w.cmd = cmd_name;
-        w.start_ns = std.time.nanoTimestamp();
+        w.start_ns = std.Io.Clock.awake.now(init.io).toNanoseconds();
     }
 
     switch (cmd) {
@@ -122,10 +123,12 @@ pub fn main() !void {
 }
 
 fn exit(w: *output_mod.Writer, cmd: []const u8, e: anyerror) void {
+    if (e == error.BrokenPipe) std.process.exit(EXIT_OK);
+
     const code: u8 = switch (e) {
         error.MissingKey, error.MissingAddress, error.AddressMismatch => EXIT_AUTH,
         error.MissingArgument, error.InvalidFlag => EXIT_USAGE,
-        error.ConnectionRefused, error.ConnectionResetByPeer, error.BrokenPipe, error.NetworkUnreachable => EXIT_NETWORK,
+        error.ConnectionRefused, error.ConnectionResetByPeer, error.NetworkUnreachable => EXIT_NETWORK,
         else => EXIT_ERROR,
     };
 
@@ -255,7 +258,7 @@ fn printGlobalHelp(w: *output_mod.Writer) !void {
     try w.print(
         \\  price <COIN>             Mid price + bid/ask spread
         \\  mids [COIN]              All mid prices (--all, --page N)
-        \\  funding [--top N]        Funding rates with heat bars
+        \\  funding [--top N] [--dex] Funding rates with heat bars
         \\  book <COIN> [--live]     L2 order book
         \\  perps [--dex xyz]        Perpetual markets
         \\  spot [--all]             Spot markets
@@ -427,7 +430,7 @@ fn printGlobalHelp(w: *output_mod.Writer) !void {
         \\  hlz buy ETH 1.0 @3400 --tp 3600 --sl 3200  Bracket order
         \\  hlz cancel ETH                           Cancel all ETH orders
         \\  hlz stream trades BTC                    Real-time BTC trades
-        \\  hlz mids --json | jq .BTC                Pipe mid price
+        \\  hlz mids --json | jq .data.BTC           Pipe mid price
         \\  HL_OUTPUT=json hlz positions              Agent-friendly default
         \\  echo '["buy BTC 0.1 @95000"]' | hlz batch --stdin  Pipe orders
         \\
@@ -464,7 +467,7 @@ fn printCommandDoc(
 
 fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
     switch (topic) {
-        .keys => try printCommandDoc(w, "keys", "Manage encrypted local keystore entries.", 
+        .keys => try printCommandDoc(w, "keys", "Manage encrypted local keystore entries.",
             \\  hlz keys ls
             \\  hlz keys new <NAME>
             \\  hlz keys import <NAME> --private-key <HEX>
@@ -482,7 +485,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz keys import market-maker --private-key 0xabc...
             \\
         ),
-        .mids => try printCommandDoc(w, "mids", "Show all mid prices or a single asset.", 
+        .mids => try printCommandDoc(w, "mids", "Show all mid prices or a single asset.",
             \\  hlz mids [COIN] [--dex <DEX>] [--all] [--page <N>]
             \\
         , "  mid\n\n",
@@ -494,7 +497,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz mids BTC
             \\
         ),
-        .positions => try printCommandDoc(w, "positions", "Show open perp positions for an address.", 
+        .positions => try printCommandDoc(w, "positions", "Show open perp positions for an address.",
             \\  hlz positions [ADDR] [--dex <DEX>] [--all-dexes]
             \\
         , "  pos\n\n",
@@ -506,7 +509,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz pos --json
             \\
         ),
-        .orders => try printCommandDoc(w, "orders", "Show open orders for an address.", 
+        .orders => try printCommandDoc(w, "orders", "Show open orders for an address.",
             \\  hlz orders [ADDR] [--dex <DEX>] [--all-dexes]
             \\
         , "  ord\n\n",
@@ -518,7 +521,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz ord --json
             \\
         ),
-        .fills => try printCommandDoc(w, "fills", "Show recent fills for an address.", 
+        .fills => try printCommandDoc(w, "fills", "Show recent fills for an address.",
             \\  hlz fills [ADDR] [--from <TIME>] [--to <TIME>]
             \\
         , null,
@@ -530,7 +533,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz fills 0xabc... --from 1710000000000
             \\
         ),
-        .balance => try printCommandDoc(w, "balance", "Show account balance, equity, and health.", 
+        .balance => try printCommandDoc(w, "balance", "Show account balance, equity, and health.",
             \\  hlz balance [ADDR] [--dex <DEX>] [--all-dexes]
             \\
         , "  bal\n\n",
@@ -542,7 +545,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz bal 0xabc...
             \\
         ),
-        .perps => try printCommandDoc(w, "perps", "List perpetual markets.", 
+        .perps => try printCommandDoc(w, "perps", "List perpetual markets.",
             \\  hlz perps [FILTER] [--dex <DEX>] [--all] [--page <N>] [--filter <TEXT>]
             \\
         , null,
@@ -554,7 +557,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz perps BTC
             \\
         ),
-        .spot => try printCommandDoc(w, "spot", "List spot markets.", 
+        .spot => try printCommandDoc(w, "spot", "List spot markets.",
             \\  hlz spot [FILTER] [--all] [--page <N>] [--filter <TEXT>]
             \\
         , null,
@@ -566,7 +569,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz spot PURR
             \\
         ),
-        .outcomes => try printCommandDoc(w, "outcomes", "List outcome (prediction) markets.", 
+        .outcomes => try printCommandDoc(w, "outcomes", "List outcome (prediction) markets.",
             \\  hlz outcomes [FILTER] [--all] [--page <N>] [--filter <TEXT>]
             \\
         , null,
@@ -581,14 +584,14 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz outcomes Recurring
             \\
         ),
-        .dexes => try printCommandDoc(w, "dexes", "List available HIP-3 DEX venues.", 
+        .dexes => try printCommandDoc(w, "dexes", "List available HIP-3 DEX venues.",
             \\  hlz dexes
             \\
         , "  dex\n\n", null,
             \\  hlz dexes
             \\
         ),
-        .buy => try printCommandDoc(w, "buy", "Place a buy order.", 
+        .buy => try printCommandDoc(w, "buy", "Place a buy order.",
             \\  hlz buy <COIN> <SZ> [@PX]
             \\  hlz buy <COIN> <SZ> --slippage <PCT>
             \\
@@ -603,7 +606,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz long ETH 1 --slippage 0.5 --dry-run
             \\
         ),
-        .sell => try printCommandDoc(w, "sell", "Place a sell order.", 
+        .sell => try printCommandDoc(w, "sell", "Place a sell order.",
             \\  hlz sell <COIN> <SZ> [@PX]
             \\  hlz sell <COIN> <SZ> --slippage <PCT>
             \\
@@ -618,7 +621,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz short ETH 1 --slippage 0.5 --dry-run
             \\
         ),
-        .cancel => try printCommandDoc(w, "cancel", "Cancel one order, a market, or all orders.", 
+        .cancel => try printCommandDoc(w, "cancel", "Cancel one order, a market, or all orders.",
             \\  hlz cancel <COIN> [OID]
             \\  hlz cancel <COIN> --cloid <CLOID>
             \\  hlz cancel --all
@@ -632,7 +635,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz cancel BTC 123456789
             \\
         ),
-        .modify => try printCommandDoc(w, "modify", "Modify an existing order in place.", 
+        .modify => try printCommandDoc(w, "modify", "Modify an existing order in place.",
             \\  hlz modify <COIN> <OID> <SZ> <PX>
             \\
         , "  mod\n\n",
@@ -643,7 +646,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz modify ETH 123456789 1.5 @3400
             \\
         ),
-        .send => try printCommandDoc(w, "send", "Send a token to another address or move assets internally.", 
+        .send => try printCommandDoc(w, "send", "Send a token to another address or move assets internally.",
             \\  hlz send <AMT> [TOKEN] <DEST>
             \\  hlz send <AMT> [TOKEN] --from <perp|spot> --to <DEST|perp|spot>
             \\  hlz send <AMT> [TOKEN] --subaccount <ADDR> --to <DEST>
@@ -658,7 +661,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz send 100 USDC --to spot
             \\
         ),
-        .stream => try printCommandDoc(w, "stream", "Subscribe to a live WebSocket feed.", 
+        .stream => try printCommandDoc(w, "stream", "Subscribe to a live WebSocket feed.",
             \\  hlz stream [trades|bbo|book|candles|mids|fills|orders] <COIN|ADDR> [--interval <INT>] [--filter <TEXT>]
             \\
         , "  sub\n\n",
@@ -670,7 +673,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz sub candles ETH --interval 5m
             \\
         ),
-        .status => try printCommandDoc(w, "status", "Fetch order status by order id.", 
+        .status => try printCommandDoc(w, "status", "Fetch order status by order id.",
             \\  hlz status <OID>
             \\
         , null,
@@ -680,19 +683,21 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz status 123456789
             \\
         ),
-        .funding => try printCommandDoc(w, "funding", "Show funding rates with optional pagination and filtering.", 
-            \\  hlz funding [FILTER] [--top <N>] [--all] [--page <N>] [--filter <TEXT>]
+        .funding => try printCommandDoc(w, "funding", "Show funding rates with optional pagination and filtering.",
+            \\  hlz funding [FILTER] [--top <N>] [--all] [--page <N>] [--filter <TEXT>] [--dex <NAME>]
             \\
         , "  fund\n\n",
             \\  A bare FILTER positional is treated the same as --filter.
             \\  Use --all to disable pagination.
+            \\  Use --dex to show HIP-3 builder perp markets for a specific dex.
             \\
         ,
             \\  hlz funding
             \\  hlz fund BTC
+            \\  hlz funding --dex hyperliquidity
             \\
         ),
-        .book => try printCommandDoc(w, "book", "Show the L2 order book for one market.", 
+        .book => try printCommandDoc(w, "book", "Show the L2 order book for one market.",
             \\  hlz book <COIN> [--depth <N>] [--live]
             \\
         , "  ob\n\n",
@@ -704,7 +709,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz ob ETH --depth 25 --live
             \\
         ),
-        .markets => try printCommandDoc(w, "markets", "Open the interactive market browser.", 
+        .markets => try printCommandDoc(w, "markets", "Open the interactive market browser.",
             \\  hlz markets
             \\
         , "  m\n\n",
@@ -714,7 +719,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz markets
             \\
         ),
-        .trade => try printCommandDoc(w, "trade", "Open the trading terminal TUI.", 
+        .trade => try printCommandDoc(w, "trade", "Open the trading terminal TUI.",
             \\  hlz trade [COIN]
             \\
         , "  t\n\n",
@@ -726,7 +731,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz t ETH
             \\
         ),
-        .leverage => try printCommandDoc(w, "leverage", "Query or set leverage for a perp market.", 
+        .leverage => try printCommandDoc(w, "leverage", "Query or set leverage for a perp market.",
             \\  hlz leverage <COIN> [N] [--cross|--isolated]
             \\
         , "  lev\n\n",
@@ -738,7 +743,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz lev ETH 5 --isolated
             \\
         ),
-        .price => try printCommandDoc(w, "price", "Show mid price plus bid/ask spread.", 
+        .price => try printCommandDoc(w, "price", "Show mid price plus bid/ask spread.",
             \\  hlz price <COIN> [--dex <DEX>] [--quote <TOKEN>] [--all]
             \\
         , null,
@@ -749,7 +754,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz price xyz:BTC --dex xyz
             \\
         ),
-        .portfolio => try printCommandDoc(w, "portfolio", "Show positions plus spot balances for an address.", 
+        .portfolio => try printCommandDoc(w, "portfolio", "Show positions plus spot balances for an address.",
             \\  hlz portfolio [ADDR] [--dex <DEX>] [--all-dexes]
             \\
         , "  folio\n\n",
@@ -761,7 +766,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz folio 0xabc...
             \\
         ),
-        .referral => try printCommandDoc(w, "referral", "Show referral status or set a referral code.", 
+        .referral => try printCommandDoc(w, "referral", "Show referral status or set a referral code.",
             \\  hlz referral
             \\  hlz referral status
             \\  hlz referral set <CODE>
@@ -776,7 +781,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz referral set MYCODE
             \\
         ),
-        .twap => try printCommandDoc(w, "twap", "Slice an order over time.", 
+        .twap => try printCommandDoc(w, "twap", "Slice an order over time.",
             \\  hlz twap <COIN> <buy|sell> <SZ> [--duration <SPAN>] [--slices <N>] [--slippage <PCT>]
             \\
         , null,
@@ -787,7 +792,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz twap BTC buy 1 --duration 30m --slices 6
             \\
         ),
-        .batch => try printCommandDoc(w, "batch", "Submit multiple order instructions at once.", 
+        .batch => try printCommandDoc(w, "batch", "Submit multiple order instructions at once.",
             \\  hlz batch "buy BTC 0.1 @98000" "sell ETH 1.0"
             \\  echo '["buy BTC 0.1 @98000"]' | hlz batch --stdin
             \\
@@ -799,7 +804,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz batch "buy BTC 0.1 @98000" "sell ETH 1.0"
             \\
         ),
-        .approve_agent => try printCommandDoc(w, "approve-agent", "Approve an API wallet for your account.", 
+        .approve_agent => try printCommandDoc(w, "approve-agent", "Approve an API wallet for your account.",
             \\  hlz approve-agent <ADDR> [--name <LABEL>]
             \\
         , "  approve\n\n",
@@ -809,7 +814,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz approve-agent 0xabc... --name bot-1
             \\
         ),
-        .withdraw => try printCommandDoc(w, "withdraw", "Bridge-withdraw funds to an address.", 
+        .withdraw => try printCommandDoc(w, "withdraw", "Bridge-withdraw funds to an address.",
             \\  hlz withdraw <AMT> [DEST]
             \\
         , null,
@@ -821,7 +826,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz withdraw 100 0xabc...
             \\
         ),
-        .transfer => try printCommandDoc(w, "transfer", "Move USDC between perp and spot wallets.", 
+        .transfer => try printCommandDoc(w, "transfer", "Move USDC between perp and spot wallets.",
             \\  hlz transfer <AMT> --to-spot
             \\  hlz transfer <AMT> --to-perp
             \\
@@ -834,7 +839,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz transfer 250 --to-perp
             \\
         ),
-        .fees => try printCommandDoc(w, "fees", "Show fee tiers and fee rates for an address.", 
+        .fees => try printCommandDoc(w, "fees", "Show fee tiers and fee rates for an address.",
             \\  hlz fees [ADDR]
             \\
         , "  fee\n\n",
@@ -846,7 +851,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz fee 0xabc...
             \\
         ),
-        .rate_limit => try printCommandDoc(w, "rate-limit", "Show account rate-limit status.", 
+        .rate_limit => try printCommandDoc(w, "rate-limit", "Show account rate-limit status.",
             \\  hlz rate-limit [ADDR]
             \\
         , "  ratelimit\n\n",
@@ -857,7 +862,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz rate-limit
             \\
         ),
-        .stake => try printCommandDoc(w, "stake", "Inspect or manage staking delegation.", 
+        .stake => try printCommandDoc(w, "stake", "Inspect or manage staking delegation.",
             \\  hlz stake status
             \\  hlz stake rewards
             \\  hlz stake history
@@ -873,7 +878,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz staking delegate 0xvalidator 1000000000000000000
             \\
         ),
-        .vault => try printCommandDoc(w, "vault", "Inspect a vault or move funds in and out.", 
+        .vault => try printCommandDoc(w, "vault", "Inspect a vault or move funds in and out.",
             \\  hlz vault <ADDR>
             \\  hlz vault info <ADDR>
             \\  hlz vault deposit <ADDR> <AMT>
@@ -888,7 +893,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz vault deposit 0xvault... 100
             \\
         ),
-        .ledger => try printCommandDoc(w, "ledger", "Show non-funding ledger updates.", 
+        .ledger => try printCommandDoc(w, "ledger", "Show non-funding ledger updates.",
             \\  hlz ledger [ADDR] [--from <TIME>] [--to <TIME>]
             \\
         , null,
@@ -900,7 +905,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz ledger 0xabc... --from 1710000000000
             \\
         ),
-        .approve_builder => try printCommandDoc(w, "approve-builder", "Approve a builder fee rate.", 
+        .approve_builder => try printCommandDoc(w, "approve-builder", "Approve a builder fee rate.",
             \\  hlz approve-builder <ADDR> <RATE>
             \\
         , null,
@@ -911,7 +916,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz approve-builder 0xbuilder... "0.001%"
             \\
         ),
-        .subaccount => try printCommandDoc(w, "subaccount", "Manage sub-accounts and sub-account transfers.", 
+        .subaccount => try printCommandDoc(w, "subaccount", "Manage sub-accounts and sub-account transfers.",
             \\  hlz subaccount ls
             \\  hlz subaccount create <NAME>
             \\  hlz subaccount transfer <ADDR> <AMT> [--withdraw]
@@ -927,7 +932,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz subaccount create market-maker-1
             \\
         ),
-        .account => try printCommandDoc(w, "account", "Query or set account abstraction mode.", 
+        .account => try printCommandDoc(w, "account", "Query or set account abstraction mode.",
             \\  hlz account
             \\  hlz account standard
             \\  hlz account unified
@@ -942,7 +947,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz account unified
             \\
         ),
-        .config => try printCommandDoc(w, "config", "Show the resolved runtime configuration.", 
+        .config => try printCommandDoc(w, "config", "Show the resolved runtime configuration.",
             \\  hlz config
             \\
         , null,
@@ -952,7 +957,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz config
             \\
         ),
-        .help => try printCommandDoc(w, "help", "Show global help or help for one command.", 
+        .help => try printCommandDoc(w, "help", "Show global help or help for one command.",
             \\  hlz help
             \\  hlz help <COMMAND>
             \\
@@ -964,7 +969,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  hlz buy --help
             \\
         ),
-        .version => try printCommandDoc(w, "version", "Print the hlz version.", 
+        .version => try printCommandDoc(w, "version", "Print the hlz version.",
             \\  hlz version
             \\
         , null, null,
