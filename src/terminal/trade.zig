@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const hlz = @import("hlz");
+const runtime = hlz.runtime;
 const client_mod = hlz.hypercore.client;
 const ws_types = hlz.hypercore.ws;
 const signing = hlz.hypercore.signing;
@@ -24,7 +25,9 @@ pub const Config = struct {
     address: ?[]const u8 = null,
     derived_addr_buf: [42]u8 = undefined,
 
-    pub fn getSigner(self: Config) !Signer { return Signer.fromHex(self.key_hex orelse return error.MissingKey); }
+    pub fn getSigner(self: Config) !Signer {
+        return Signer.fromHex(self.key_hex orelse return error.MissingKey);
+    }
     pub fn signerAddress(self: Config, buf: *[42]u8) ![]const u8 {
         const signer = try self.getSigner();
         return signer.addressHex(buf);
@@ -37,6 +40,30 @@ pub const Config = struct {
             return self.address;
         }
         return null;
+    }
+};
+
+fn nowMs() i64 {
+    return runtime.wallMs();
+}
+
+fn sleepNs(ns: u64) void {
+    runtime.sleepNs(ns) catch {};
+}
+
+fn stderrWriteAll(data: []const u8) void {
+    std.Io.File.stderr().writeStreamingAll(runtime.io(), data) catch {};
+}
+
+const Mutex = struct {
+    inner: std.Io.Mutex = .init,
+
+    fn lock(self: *Mutex) void {
+        self.inner.lockUncancelable(runtime.io());
+    }
+
+    fn unlock(self: *Mutex) void {
+        self.inner.unlock(runtime.io());
     }
 };
 
@@ -109,10 +136,18 @@ const PickerEntry = struct {
     mid: [16]u8 = undefined,
     mid_len: u8 = 0,
 
-    fn coinSlice(self: *const PickerEntry) []const u8 { return self.coin[0..self.coin_len]; }
-    fn displaySlice(self: *const PickerEntry) []const u8 { return self.display[0..self.display_len]; }
-    fn detailSlice(self: *const PickerEntry) []const u8 { return self.detail[0..self.detail_len]; }
-    fn midSlice(self: *const PickerEntry) []const u8 { return self.mid[0..self.mid_len]; }
+    fn coinSlice(self: *const PickerEntry) []const u8 {
+        return self.coin[0..self.coin_len];
+    }
+    fn displaySlice(self: *const PickerEntry) []const u8 {
+        return self.display[0..self.display_len];
+    }
+    fn detailSlice(self: *const PickerEntry) []const u8 {
+        return self.detail[0..self.detail_len];
+    }
+    fn midSlice(self: *const PickerEntry) []const u8 {
+        return self.mid[0..self.mid_len];
+    }
 
     fn matchesFilter(self: *const PickerEntry, filter: []const u8) bool {
         if (filter.len == 0) return true;
@@ -129,7 +164,10 @@ fn containsInsensitive(haystack: []const u8, needle: []const u8) bool {
     while (i + needle.len <= haystack.len) : (i += 1) {
         var ok = true;
         for (0..needle.len) |j| {
-            if (std.ascii.toLower(haystack[i + j]) != std.ascii.toLower(needle[j])) { ok = false; break; }
+            if (std.ascii.toLower(haystack[i + j]) != std.ascii.toLower(needle[j])) {
+                ok = false;
+                break;
+            }
         }
         if (ok) return true;
     }
@@ -337,51 +375,84 @@ fn copyTo(dst: []u8, src: []const u8) usize {
 }
 
 const InfoData = struct {
-    mark_buf: [20]u8 = undefined, mark_len: usize = 0,
-    oracle_buf: [20]u8 = undefined, oracle_len: usize = 0,
-    change_buf: [32]u8 = undefined, change_len: usize = 0,
-    volume_buf: [20]u8 = undefined, volume_len: usize = 0,
-    oi_buf: [20]u8 = undefined, oi_len: usize = 0,
-    funding_buf: [20]u8 = undefined, funding_len: usize = 0,
+    mark_buf: [20]u8 = undefined,
+    mark_len: usize = 0,
+    oracle_buf: [20]u8 = undefined,
+    oracle_len: usize = 0,
+    change_buf: [32]u8 = undefined,
+    change_len: usize = 0,
+    volume_buf: [20]u8 = undefined,
+    volume_len: usize = 0,
+    oi_buf: [20]u8 = undefined,
+    oi_len: usize = 0,
+    funding_buf: [20]u8 = undefined,
+    funding_len: usize = 0,
     is_negative_change: bool = false,
 
-    fn mark(self: *const InfoData) []const u8 { return if (self.mark_len > 0) self.mark_buf[0..self.mark_len] else "—"; }
-    fn oracle(self: *const InfoData) []const u8 { return if (self.oracle_len > 0) self.oracle_buf[0..self.oracle_len] else "—"; }
-    fn change_24h(self: *const InfoData) []const u8 { return if (self.change_len > 0) self.change_buf[0..self.change_len] else "—"; }
-    fn volume_24h(self: *const InfoData) []const u8 { return if (self.volume_len > 0) self.volume_buf[0..self.volume_len] else "—"; }
-    fn open_interest(self: *const InfoData) []const u8 { return if (self.oi_len > 0) self.oi_buf[0..self.oi_len] else "—"; }
-    fn funding(self: *const InfoData) []const u8 { return if (self.funding_len > 0) self.funding_buf[0..self.funding_len] else "—"; }
+    fn mark(self: *const InfoData) []const u8 {
+        return if (self.mark_len > 0) self.mark_buf[0..self.mark_len] else "—";
+    }
+    fn oracle(self: *const InfoData) []const u8 {
+        return if (self.oracle_len > 0) self.oracle_buf[0..self.oracle_len] else "—";
+    }
+    fn change_24h(self: *const InfoData) []const u8 {
+        return if (self.change_len > 0) self.change_buf[0..self.change_len] else "—";
+    }
+    fn volume_24h(self: *const InfoData) []const u8 {
+        return if (self.volume_len > 0) self.volume_buf[0..self.volume_len] else "—";
+    }
+    fn open_interest(self: *const InfoData) []const u8 {
+        return if (self.oi_len > 0) self.oi_buf[0..self.oi_len] else "—";
+    }
+    fn funding(self: *const InfoData) []const u8 {
+        return if (self.funding_len > 0) self.funding_buf[0..self.funding_len] else "—";
+    }
 };
 
 const BookLevel = struct {
-    px_buf: [16]u8 = undefined, px_len: usize = 0,
+    px_buf: [16]u8 = undefined,
+    px_len: usize = 0,
     sz: f64 = 0,
-    sz_buf: [16]u8 = undefined, sz_len: usize = 0,
+    sz_buf: [16]u8 = undefined,
+    sz_len: usize = 0,
     cum: f64 = 0,
 
-    fn px(self: *const BookLevel) []const u8 { return if (self.px_len > 0) self.px_buf[0..self.px_len] else "0"; }
-    fn szStr(self: *const BookLevel) []const u8 { return if (self.sz_len > 0) self.sz_buf[0..self.sz_len] else "0"; }
+    fn px(self: *const BookLevel) []const u8 {
+        return if (self.px_len > 0) self.px_buf[0..self.px_len] else "0";
+    }
+    fn szStr(self: *const BookLevel) []const u8 {
+        return if (self.sz_len > 0) self.sz_buf[0..self.sz_len] else "0";
+    }
 };
 
 const OrderState = struct {
     side: OrderSide = .buy,
     order_type: OrderType = .market,
     field: OrderField = .size,
-    size_buf: [16]u8 = .{0} ** 16, size_len: usize = 0,
-    price_buf: [16]u8 = .{0} ** 16, price_len: usize = 0,
-    status_buf: [48]u8 = undefined, status_len: usize = 0,
+    size_buf: [16]u8 = .{0} ** 16,
+    size_len: usize = 0,
+    price_buf: [16]u8 = .{0} ** 16,
+    price_len: usize = 0,
+    status_buf: [48]u8 = undefined,
+    status_len: usize = 0,
     status_is_error: bool = false,
     status_set_ms: i64 = 0,
 
-    fn sizeStr(self: *const OrderState) []const u8 { return self.size_buf[0..self.size_len]; }
-    fn priceStr(self: *const OrderState) []const u8 { return self.price_buf[0..self.price_len]; }
-    fn statusStr(self: *const OrderState) []const u8 { return self.status_buf[0..self.status_len]; }
+    fn sizeStr(self: *const OrderState) []const u8 {
+        return self.size_buf[0..self.size_len];
+    }
+    fn priceStr(self: *const OrderState) []const u8 {
+        return self.price_buf[0..self.price_len];
+    }
+    fn statusStr(self: *const OrderState) []const u8 {
+        return self.status_buf[0..self.status_len];
+    }
     fn setStatus(self: *OrderState, msg: []const u8, err: bool) void {
         const n = @min(msg.len, 48);
         @memcpy(self.status_buf[0..n], msg[0..n]);
         self.status_len = n;
         self.status_is_error = err;
-        self.status_set_ms = std.time.milliTimestamp();
+        self.status_set_ms = nowMs();
     }
     fn clearStatus(self: *OrderState) void {
         self.status_len = 0;
@@ -396,14 +467,24 @@ const OrderState = struct {
     }
     fn appendToActive(self: *OrderState, c: u8) void {
         switch (self.field) {
-            .size => if (self.size_len < 15) { self.size_buf[self.size_len] = c; self.size_len += 1; },
-            .price => if (self.price_len < 15) { self.price_buf[self.price_len] = c; self.price_len += 1; },
+            .size => if (self.size_len < 15) {
+                self.size_buf[self.size_len] = c;
+                self.size_len += 1;
+            },
+            .price => if (self.price_len < 15) {
+                self.price_buf[self.price_len] = c;
+                self.price_len += 1;
+            },
         }
     }
     fn backspaceActive(self: *OrderState) void {
         switch (self.field) {
-            .size => if (self.size_len > 0) { self.size_len -= 1; },
-            .price => if (self.price_len > 0) { self.price_len -= 1; },
+            .size => if (self.size_len > 0) {
+                self.size_len -= 1;
+            },
+            .price => if (self.price_len > 0) {
+                self.price_len -= 1;
+            },
         }
     }
 };
@@ -422,8 +503,7 @@ const LeverageState = struct {
     fn step(self: *LeverageState, delta: i32) void {
         const now: i32 = @intCast(self.value);
         const next: i32 = now + delta;
-        if (next <= 0) self.value = LEVERAGE_MIN
-        else self.value = clamp(@intCast(next), self.max);
+        if (next <= 0) self.value = LEVERAGE_MIN else self.value = clamp(@intCast(next), self.max);
     }
 };
 
@@ -465,7 +545,7 @@ const UiState = struct {
 
 /// Shared state (workers write, UI snapshots under lock)
 const Shared = struct {
-    mu: std.Thread.Mutex = .{},
+    mu: Mutex = .{},
     gen: u64 = 0,
     running: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
     ws_fd: std.atomic.Value(std.posix.fd_t) = std.atomic.Value(std.posix.fd_t).init(-1),
@@ -607,21 +687,34 @@ const Snapshot = struct {
         defer s.mu.unlock();
         return .{
             .gen = s.gen,
-            .candles = s.candles, .candle_count = s.candle_count,
+            .candles = s.candles,
+            .candle_count = s.candle_count,
             .info = s.info,
-            .bids = s.bids, .asks = s.asks, .n_bids = s.n_bids, .n_asks = s.n_asks, .max_cum = s.max_cum,
+            .bids = s.bids,
+            .asks = s.asks,
+            .n_bids = s.n_bids,
+            .n_asks = s.n_asks,
+            .max_cum = s.max_cum,
             .trades = s.trades,
-            .positions = s.positions, .open_orders = s.open_orders,
-            .trade_history = s.trade_history, .funding_history = s.funding_history,
-            .order_history = s.order_history, .balances = s.balances,
-            .acct_buf = s.acct_buf, .acct_len = s.acct_len,
-            .margin_buf = s.margin_buf, .margin_len = s.margin_len,
-            .avail_buf = s.avail_buf, .avail_len = s.avail_len,
-            .leverage_buf = s.leverage_buf, .leverage_len = s.leverage_len,
+            .positions = s.positions,
+            .open_orders = s.open_orders,
+            .trade_history = s.trade_history,
+            .funding_history = s.funding_history,
+            .order_history = s.order_history,
+            .balances = s.balances,
+            .acct_buf = s.acct_buf,
+            .acct_len = s.acct_len,
+            .margin_buf = s.margin_buf,
+            .margin_len = s.margin_len,
+            .avail_buf = s.avail_buf,
+            .avail_len = s.avail_len,
+            .leverage_buf = s.leverage_buf,
+            .leverage_len = s.leverage_len,
             .leverage_is_cross = s.leverage_is_cross,
             .max_leverage = s.max_leverage,
             .account_mode = s.account_mode,
-            .spot_usdc_buf = s.spot_usdc_buf, .spot_usdc_len = s.spot_usdc_len,
+            .spot_usdc_buf = s.spot_usdc_buf,
+            .spot_usdc_len = s.spot_usdc_len,
             .asset_index = s.asset_index,
         };
     }
@@ -671,7 +764,10 @@ const WsWorker = struct {
 
             // REST candle snapshot on change
             if (changed) {
-                var rc = switch (chain) { .mainnet => Client.mainnet(allocator), .testnet => Client.testnet(allocator) };
+                var rc = switch (chain) {
+                    .mainnet => Client.mainnet(allocator),
+                    .testnet => Client.testnet(allocator),
+                };
                 defer rc.deinit();
                 var candles: [Chart.MAX_CANDLES]Chart.Candle = undefined;
                 var count: usize = 0;
@@ -681,7 +777,7 @@ const WsWorker = struct {
 
             // Connect WS (blocking reads, broken by shutdown())
             const conn = ws_types.Connection.connect(allocator, chain) catch {
-                std.Thread.sleep(1_000_000_000);
+                sleepNs(1_000_000_000);
                 continue;
             };
             defer conn.close();
@@ -730,7 +826,7 @@ const WsWorker = struct {
                 }
             }
             shared.ws_fd.store(-1, .release);
-            std.Thread.sleep(100_000_000);
+            sleepNs(100_000_000);
         }
     }
 
@@ -819,8 +915,10 @@ const WsWorker = struct {
         if (c.t == 0) return;
         shared.applyCandle(.{
             .t = @as(i64, @intCast(c.t)),
-            .o = decToF64(c.o), .h = decToF64(c.h),
-            .l = decToF64(c.l), .c = decToF64(c.c),
+            .o = decToF64(c.o),
+            .h = decToF64(c.h),
+            .l = decToF64(c.l),
+            .c = decToF64(c.c),
             .v = decToF64(c.v),
         });
     }
@@ -850,7 +948,10 @@ const RestWorker = struct {
                 coin_len = shared.coin_len;
                 coin_gen = shared.coin_gen;
             }
-            if (coin_gen != prev_gen) { last_ms = 0; prev_gen = coin_gen; }
+            if (coin_gen != prev_gen) {
+                last_ms = 0;
+                prev_gen = coin_gen;
+            }
 
             // Resolve asset index on coin change
             if (coin_gen != resolved_coin_gen) {
@@ -880,12 +981,12 @@ const RestWorker = struct {
             }
 
             const stale = shared.user_data_stale.swap(false, .acq_rel);
-            const now = std.time.milliTimestamp();
+            const now = nowMs();
             if (user_addr != null and (stale or now - last_ms >= 3000)) {
                 Rest.fetchUserData(client, user_addr.?, coin_buf[0..coin_len], shared);
-                last_ms = std.time.milliTimestamp();
+                last_ms = nowMs();
             }
-            std.Thread.sleep(if (stale) @as(u64, 50_000_000) else @as(u64, 500_000_000));
+            sleepNs(if (stale) @as(u64, 50_000_000) else @as(u64, 500_000_000));
         }
     }
 };
@@ -904,7 +1005,9 @@ const Input = struct {
         if (ui.focus == .order_entry) return handleOrderKey(key, ui, client, config, shared);
         switch (key) {
             .char => |c| switch (c) {
-                'q' => { running.* = false; },
+                'q' => {
+                    running.* = false;
+                },
                 'i', 'I' => {
                     for (intervals, 0..) |iv, idx| {
                         if (std.mem.eql(u8, ui.interval, iv)) {
@@ -913,36 +1016,79 @@ const Input = struct {
                         }
                     }
                 },
-                '1' => { ui.tab = .balances; ui.selected_row = 0; ui.scroll_offset = 0; },
-                '2' => { ui.tab = .positions; ui.selected_row = 0; ui.scroll_offset = 0; },
-                '3' => { ui.tab = .open_orders; ui.selected_row = 0; ui.scroll_offset = 0; },
-                '4' => { ui.tab = .trade_history; ui.selected_row = 0; ui.scroll_offset = 0; },
-                '5' => { ui.tab = .funding_history; ui.selected_row = 0; ui.scroll_offset = 0; },
-                '6' => { ui.tab = .order_history; ui.selected_row = 0; ui.scroll_offset = 0; },
-                'j' => if (ui.focus == .bottom) { ui.selected_row += 1; },
-                'k' => if (ui.focus == .bottom) { ui.selected_row = ui.selected_row -| 1; },
-                'g' => if (ui.focus == .bottom) { ui.selected_row = 0; ui.scroll_offset = 0; },
-                'G' => if (ui.focus == .bottom) { ui.selected_row = 999; }, // clamped later
-                'h' => ui.chart_scroll += 10, 'l' => ui.chart_scroll = ui.chart_scroll -| 10,
-                'H' => ui.chart_scroll += 50, 'L' => ui.chart_scroll = ui.chart_scroll -| 50,
+                '1' => {
+                    ui.tab = .balances;
+                    ui.selected_row = 0;
+                    ui.scroll_offset = 0;
+                },
+                '2' => {
+                    ui.tab = .positions;
+                    ui.selected_row = 0;
+                    ui.scroll_offset = 0;
+                },
+                '3' => {
+                    ui.tab = .open_orders;
+                    ui.selected_row = 0;
+                    ui.scroll_offset = 0;
+                },
+                '4' => {
+                    ui.tab = .trade_history;
+                    ui.selected_row = 0;
+                    ui.scroll_offset = 0;
+                },
+                '5' => {
+                    ui.tab = .funding_history;
+                    ui.selected_row = 0;
+                    ui.scroll_offset = 0;
+                },
+                '6' => {
+                    ui.tab = .order_history;
+                    ui.selected_row = 0;
+                    ui.scroll_offset = 0;
+                },
+                'j' => if (ui.focus == .bottom) {
+                    ui.selected_row += 1;
+                },
+                'k' => if (ui.focus == .bottom) {
+                    ui.selected_row = ui.selected_row -| 1;
+                },
+                'g' => if (ui.focus == .bottom) {
+                    ui.selected_row = 0;
+                    ui.scroll_offset = 0;
+                },
+                'G' => if (ui.focus == .bottom) {
+                    ui.selected_row = 999;
+                }, // clamped later
+                'h' => ui.chart_scroll += 10,
+                'l' => ui.chart_scroll = ui.chart_scroll -| 10,
+                'H' => ui.chart_scroll += 50,
+                'L' => ui.chart_scroll = ui.chart_scroll -| 50,
                 '0' => ui.chart_scroll = 0,
                 '+', '=' => ui.book_depth = @min(ui.book_depth + 5, 40),
                 '-', '_' => ui.book_depth = if (ui.book_depth > 5) ui.book_depth - 5 else 5,
                 'x', 'X' => if (ui.focus == .bottom) {
-                    if (ui.tab == .open_orders) Orders.cancelOrder(ui, client, config, shared)
-                    else if (ui.tab == .positions) Orders.closePosition(ui, client, config, shared);
+                    if (ui.tab == .open_orders) Orders.cancelOrder(ui, client, config, shared) else if (ui.tab == .positions) Orders.closePosition(ui, client, config, shared);
                 },
                 'v', 'V' => openActionModal(ui),
                 'd', 'D' => ui.show_perf = !ui.show_perf,
-                'r', 'R' => if (ui.focus == .order_entry) { ui.order = OrderState{}; ui.order.setStatus("Reset", false); },
+                'r', 'R' => if (ui.focus == .order_entry) {
+                    ui.order = OrderState{};
+                    ui.order.setStatus("Reset", false);
+                },
                 else => {},
             },
             .tab => ui.focus = @enumFromInt((@intFromEnum(ui.focus) + 1) % 5),
-            .esc => { running.* = false; },
+            .esc => {
+                running.* = false;
+            },
             .left => ui.chart_scroll += 5,
             .right => ui.chart_scroll = ui.chart_scroll -| 5,
-            .up => if (ui.focus == .bottom) { ui.selected_row = ui.selected_row -| 1; },
-            .down => if (ui.focus == .bottom) { ui.selected_row += 1; },
+            .up => if (ui.focus == .bottom) {
+                ui.selected_row = ui.selected_row -| 1;
+            },
+            .down => if (ui.focus == .bottom) {
+                ui.selected_row += 1;
+            },
 
             else => {},
         }
@@ -955,12 +1101,20 @@ const Input = struct {
                 '0'...'9', '.' => o.appendToActive(c),
                 'b', 'B' => o.side = .buy,
                 's', 'S' => o.side = .sell,
-                'm', 'M' => { o.order_type = if (o.order_type == .market) .limit else .market; if (o.order_type == .limit) o.field = .size; },
+                'm', 'M' => {
+                    o.order_type = if (o.order_type == .market) .limit else .market;
+                    if (o.order_type == .limit) o.field = .size;
+                },
                 'L' => openLeverageModal(ui, shared),
                 'v', 'V' => openActionModal(ui),
                 'd', 'D' => ui.show_perf = !ui.show_perf,
-                'q' => { ui.focus = .chart; },
-                'r', 'R' => { o.* = OrderState{}; o.setStatus("Reset", false); },
+                'q' => {
+                    ui.focus = .chart;
+                },
+                'r', 'R' => {
+                    o.* = OrderState{};
+                    o.setStatus("Reset", false);
+                },
                 else => {},
             },
             .backspace => o.backspaceActive(),
@@ -968,10 +1122,14 @@ const Input = struct {
                 Orders.execute(o, client, config, shared);
             },
             .tab => {
-                if (o.order_type == .limit and o.field == .size) o.field = .price
-                else { o.field = .size; ui.focus = .bottom; }
+                if (o.order_type == .limit and o.field == .size) o.field = .price else {
+                    o.field = .size;
+                    ui.focus = .bottom;
+                }
             },
-            .up, .down => if (o.order_type == .limit) { o.field = if (o.field == .size) .price else .size; },
+            .up, .down => if (o.order_type == .limit) {
+                o.field = if (o.field == .size) .price else .size;
+            },
             .esc => ui.focus = .chart,
             else => {},
         }
@@ -1170,7 +1328,11 @@ const Input = struct {
         const p = &ui.picker;
         switch (key) {
             .tab => {
-                p.tab = switch (p.tab) { .perps => .spot, .spot => .outcomes, .outcomes => .perps };
+                p.tab = switch (p.tab) {
+                    .perps => .spot,
+                    .spot => .outcomes,
+                    .outcomes => .perps,
+                };
                 p.loaded_tab = null;
                 p.reset();
             },
@@ -1220,7 +1382,9 @@ const Input = struct {
                     p.open = false;
                 }
             },
-            .esc => { p.open = false; },
+            .esc => {
+                p.open = false;
+            },
             else => {},
         }
     }
@@ -1286,14 +1450,19 @@ const Render = struct {
         bottomTabs(buf, ui.tab, snap, bottom_rect, ui.selected_row, ui.focus == .bottom, ui.scroll_offset, ui.order.statusStr(), ui.order.status_is_error);
 
         const focus_rect = switch (ui.focus) {
-            .chart => chart_rect, .book => book_rect, .tape => tape_rect,
-            .order_entry => order_rect, .bottom => bottom_rect,
+            .chart => chart_rect,
+            .book => book_rect,
+            .tape => tape_rect,
+            .order_entry => order_rect,
+            .bottom => bottom_rect,
         };
         focusIndicator(buf, focus_rect);
 
         const badge = switch (ui.focus) {
-            .chart => " \xe2\x97\x86 CHART ", .book => " \xe2\x97\x86 BOOK ",
-            .tape => " \xe2\x97\x86 TRADES ", .order_entry => " \xe2\x97\x86 ORDER ",
+            .chart => " \xe2\x97\x86 CHART ",
+            .book => " \xe2\x97\x86 BOOK ",
+            .tape => " \xe2\x97\x86 TRADES ",
+            .order_entry => " \xe2\x97\x86 ORDER ",
             .bottom => " \xe2\x97\x86 TABS ",
         };
         if (ui.show_perf) {
@@ -1544,8 +1713,10 @@ const Render = struct {
         const sf = focused and o.field == .size;
         buf.putStr(ix, y, if (sf) "\xe2\x96\xb8 " else "  ", .{ .fg = hl_accent });
         buf.putStr(ix + 2, y, "Size $", if (sf) Style{ .fg = hl_accent, .bold = true } else s_dim);
-        if (sf) { buf.putStr(ix + 10, y, sz, s_bold); buf.putStr(ix + 10 + @as(u16, @intCast(sz.len)), y, "\xe2\x96\x88", .{ .fg = hl_accent }); }
-        else buf.putStr(ix + 10, y, if (sz.len > 0) sz else "\xe2\x80\x94", s_white);
+        if (sf) {
+            buf.putStr(ix + 10, y, sz, s_bold);
+            buf.putStr(ix + 10 + @as(u16, @intCast(sz.len)), y, "\xe2\x96\x88", .{ .fg = hl_accent });
+        } else buf.putStr(ix + 10, y, if (sz.len > 0) sz else "\xe2\x80\x94", s_white);
         y += 1;
         // Price (limit)
         if (o.order_type == .limit) {
@@ -1553,10 +1724,15 @@ const Render = struct {
             const pf = focused and o.field == .price;
             buf.putStr(ix, y, if (pf) "\xe2\x96\xb8 " else "  ", .{ .fg = hl_accent });
             buf.putStr(ix + 2, y, "Price", if (pf) Style{ .fg = hl_accent, .bold = true } else s_dim);
-            if (pf) { buf.putStr(ix + 10, y, px, s_bold); buf.putStr(ix + 10 + @as(u16, @intCast(px.len)), y, "\xe2\x96\x88", .{ .fg = hl_accent }); }
-            else buf.putStr(ix + 10, y, if (px.len > 0) px else "\xe2\x80\x94", s_white);
+            if (pf) {
+                buf.putStr(ix + 10, y, px, s_bold);
+                buf.putStr(ix + 10 + @as(u16, @intCast(px.len)), y, "\xe2\x96\x88", .{ .fg = hl_accent });
+            } else buf.putStr(ix + 10, y, if (px.len > 0) px else "\xe2\x80\x94", s_white);
             y += 1;
-            if (focused) { buf.putStr(ix + 2, y, "\xe2\x86\x91\xe2\x86\x93 switch field", s_dim); y += 1; }
+            if (focused) {
+                buf.putStr(ix + 2, y, "\xe2\x86\x91\xe2\x86\x93 switch field", s_dim);
+                y += 1;
+            }
         }
         // ── Account ──
         if (y + 1 < content_bottom) {
@@ -1640,7 +1816,10 @@ const Render = struct {
             tx += 1;
             buf.putStr(tx, rect.y, lbl, if (act) Style{ .fg = hl_text, .bg = hl_panel, .bold = true } else s_dim);
             tx += @as(u16, @intCast(lbl.len));
-            if (act) { var ux: u16 = tx -| @as(u16, @intCast(lbl.len)); while (ux < tx) : (ux += 1) buf.putStr(ux, rect.y + 1, "\xe2\x96\x94", .{ .fg = hl_accent }); }
+            if (act) {
+                var ux: u16 = tx -| @as(u16, @intCast(lbl.len));
+                while (ux < tx) : (ux += 1) buf.putStr(ux, rect.y + 1, "\xe2\x96\x94", .{ .fg = hl_accent });
+            }
             tx += 1;
         }
         var sx: u16 = 0;
@@ -1651,15 +1830,21 @@ const Render = struct {
         const cr = Rect{ .x = rect.x, .y = rect.y + 2, .w = rect.w, .h = rect.h -| 3 };
         if (cr.h < 1) return;
         const tbl: *const TableData = switch (active) {
-            .positions => &snap.positions, .open_orders => &snap.open_orders,
-            .trade_history => &snap.trade_history, .funding_history => &snap.funding_history,
-            .order_history => &snap.order_history, .balances => &snap.balances,
+            .positions => &snap.positions,
+            .open_orders => &snap.open_orders,
+            .trade_history => &snap.trade_history,
+            .funding_history => &snap.funding_history,
+            .order_history => &snap.order_history,
+            .balances => &snap.balances,
         };
         if (tbl.n_rows == 0) {
             buf.putStr(cr.x + 2, cr.y, switch (active) {
-                .positions => "No open positions", .open_orders => "No open orders",
-                .trade_history => "No trade history", .funding_history => "No funding history",
-                .order_history => "No order history", .balances => "No balances",
+                .positions => "No open positions",
+                .open_orders => "No open orders",
+                .trade_history => "No trade history",
+                .funding_history => "No funding history",
+                .order_history => "No order history",
+                .balances => "No balances",
             }, s_dim);
         } else table(buf, tbl, cr, if (focused) selected else null, if (focused) scroll else null);
         const hint: []const u8 = switch (active) {
@@ -1697,7 +1882,11 @@ const Render = struct {
             const ry = rect.y + 1 + @as(u16, @intCast(vi));
             if (ry >= rect.y + rect.h) break;
             const is_sel = if (selected) |s| r == s else false;
-            const rs: Style = switch (tbl.row_colors[r]) { .positive => s_green, .negative => s_red, .neutral => s_white };
+            const rs: Style = switch (tbl.row_colors[r]) {
+                .positive => s_green,
+                .negative => s_red,
+                .neutral => s_white,
+            };
             // Highlight selected row background
             if (is_sel) {
                 var sx: u16 = 0;
@@ -1857,7 +2046,6 @@ const Render = struct {
             .close_selected => snap.positions.n_rows > 0,
         };
     }
-
 };
 
 // ╔══════════════════════════════════════════════════════════════════╗
@@ -1906,11 +2094,20 @@ const Orders = struct {
             return;
         };
         const sz_str = order.sizeStr();
-        if (sz_str.len == 0) { order.setStatus("Enter size first", true); return; }
-        const usd_dec = Decimal.fromString(sz_str) catch { order.setStatus("Invalid size", true); return; };
-        if (usd_dec.isZero() or usd_dec.mantissa < 0) { order.setStatus("Size must be > 0", true); return; }
+        if (sz_str.len == 0) {
+            order.setStatus("Enter size first", true);
+            return;
+        }
+        const usd_dec = Decimal.fromString(sz_str) catch {
+            order.setStatus("Invalid size", true);
+            return;
+        };
+        if (usd_dec.isZero() or usd_dec.mantissa < 0) {
+            order.setStatus("Size must be > 0", true);
+            return;
+        }
 
-        const nonce = @as(u64, @intCast(std.time.milliTimestamp()));
+        const nonce = @as(u64, @intCast(nowMs()));
         const tif: types.TimeInForce = if (order.order_type == .market) .FrontendMarket else .Gtc;
 
         // Determine execution price and conversion price
@@ -1921,13 +2118,25 @@ const Orders = struct {
                 snap.asks[0].px()
             else if (order.side == .sell and snap.n_bids > 0)
                 snap.bids[0].px()
-            else { order.setStatus("No book data", true); return; };
-            const bbo_px = Decimal.fromString(bbo_str) catch { order.setStatus("Invalid book price", true); return; };
+            else {
+                order.setStatus("No book data", true);
+                return;
+            };
+            const bbo_px = Decimal.fromString(bbo_str) catch {
+                order.setStatus("Invalid book price", true);
+                return;
+            };
             break :blk .{ bbo_px, bbo_px.mul(if (order.side == .buy) SLIPPAGE_BUY else SLIPPAGE_SELL) };
         } else blk: {
             const p = order.priceStr();
-            if (p.len == 0) { order.setStatus("Enter price first", true); return; }
-            const limit_px = Decimal.fromString(p) catch { order.setStatus("Invalid price format", true); return; };
+            if (p.len == 0) {
+                order.setStatus("Enter price first", true);
+                return;
+            }
+            const limit_px = Decimal.fromString(p) catch {
+                order.setStatus("Invalid price format", true);
+                return;
+            };
             break :blk .{ limit_px, limit_px };
         };
         const px_dec = if (resolved.sz_decimals >= 0) blk: {
@@ -1980,11 +2189,20 @@ const Orders = struct {
             return;
         };
         const snap = Snapshot.take(shared);
-        if (ui.selected_row >= snap.open_orders.n_rows) { ui.order.setStatus("No order selected", true); return; }
+        if (ui.selected_row >= snap.open_orders.n_rows) {
+            ui.order.setStatus("No order selected", true);
+            return;
+        }
         const oid_str = snap.open_orders.get(ui.selected_row, 5); // OID column
         const coin = snap.open_orders.get(ui.selected_row, 0);
-        if (oid_str.len == 0 or coin.len == 0) { ui.order.setStatus("Invalid order", true); return; }
-        const oid = std.fmt.parseInt(u64, oid_str, 10) catch { ui.order.setStatus("Invalid OID", true); return; };
+        if (oid_str.len == 0 or coin.len == 0) {
+            ui.order.setStatus("Invalid order", true);
+            return;
+        }
+        const oid = std.fmt.parseInt(u64, oid_str, 10) catch {
+            ui.order.setStatus("Invalid OID", true);
+            return;
+        };
 
         const asset = resolveAsset(client, coin) catch {
             ui.order.setStatus("Asset not resolved", true);
@@ -1992,7 +2210,7 @@ const Orders = struct {
         };
         const cancel = types.Cancel{ .asset = asset.index, .oid = oid };
         const arr = [1]types.Cancel{cancel};
-        const nonce = @as(u64, @intCast(std.time.milliTimestamp()));
+        const nonce = @as(u64, @intCast(nowMs()));
         var result = client.cancel(signer, .{ .cancels = &arr }, nonce, null, null) catch {
             ui.order.setStatus("Cancel failed (network)", true);
             return;
@@ -2025,9 +2243,12 @@ const Orders = struct {
             n += 1;
             if (n >= MAX_ROWS) break;
         }
-        if (n == 0) { ui.order.setStatus("No open orders for coin", true); return; }
+        if (n == 0) {
+            ui.order.setStatus("No open orders for coin", true);
+            return;
+        }
 
-        const nonce = @as(u64, @intCast(std.time.milliTimestamp()));
+        const nonce = @as(u64, @intCast(nowMs()));
         var result = client.cancel(signer, .{ .cancels = cancels[0..n] }, nonce, null, null) catch {
             ui.order.setStatus("Cancel all failed (network)", true);
             return;
@@ -2050,21 +2271,33 @@ const Orders = struct {
             return;
         };
         const snap = Snapshot.take(shared);
-        if (ui.selected_row >= snap.positions.n_rows) { ui.order.setStatus("No position selected", true); return; }
+        if (ui.selected_row >= snap.positions.n_rows) {
+            ui.order.setStatus("No position selected", true);
+            return;
+        }
         const coin = snap.positions.get(ui.selected_row, 0); // Coin column
         const sz_str = snap.positions.get(ui.selected_row, 2); // Size column
         const side_str = snap.positions.get(ui.selected_row, 1); // Side column
-        if (coin.len == 0 or sz_str.len == 0) { ui.order.setStatus("Invalid position", true); return; }
+        if (coin.len == 0 or sz_str.len == 0) {
+            ui.order.setStatus("Invalid position", true);
+            return;
+        }
 
         const resolved = resolveAsset(client, coin) catch {
             ui.order.setStatus("Asset not resolved", true);
             return;
         };
-        const sz_raw = Decimal.fromString(sz_str) catch { ui.order.setStatus("Invalid size", true); return; };
+        const sz_raw = Decimal.fromString(sz_str) catch {
+            ui.order.setStatus("Invalid size", true);
+            return;
+        };
         const sz_dec = if (resolved.sz_decimals >= 0) blk: {
             const sd: u8 = @intCast(resolved.sz_decimals);
             const truncated = sz_raw.truncDp(sd);
-            if (truncated.isZero()) { ui.order.setStatus("Position size too small", true); return; }
+            if (truncated.isZero()) {
+                ui.order.setStatus("Position size too small", true);
+                return;
+            }
             break :blk truncated;
         } else sz_raw;
         const is_long = std.mem.eql(u8, side_str, "LONG");
@@ -2077,7 +2310,10 @@ const Orders = struct {
                 ui.order.setStatus("No book data for slippage price", true);
                 return;
             };
-            const bbo_px = Decimal.fromString(bbo_str) catch { ui.order.setStatus("Invalid book price", true); return; };
+            const bbo_px = Decimal.fromString(bbo_str) catch {
+                ui.order.setStatus("Invalid book price", true);
+                return;
+            };
             break :blk bbo_px.mul(if (is_long) SLIPPAGE_SELL else SLIPPAGE_BUY);
         };
         const px_dec = if (resolved.sz_decimals >= 0) blk: {
@@ -2087,7 +2323,7 @@ const Orders = struct {
                 tick_mod.PriceTick.forPerp(resolved.sz_decimals);
             break :blk pt.round(px_raw) orelse px_raw;
         } else px_raw;
-        const nonce = @as(u64, @intCast(std.time.milliTimestamp()));
+        const nonce = @as(u64, @intCast(nowMs()));
         const ord = types.OrderRequest{ .asset = resolved.index, .is_buy = !is_long, .limit_px = px_dec, .sz = sz_dec, .reduce_only = true, .order_type = .{ .limit = .{ .tif = .FrontendMarket } }, .cloid = makeCloid(nonce) };
         const arr = [1]types.OrderRequest{ord};
         var result = client.place(signer, .{ .orders = &arr, .grouping = .na }, nonce, null, null) catch {
@@ -2115,7 +2351,7 @@ const Orders = struct {
         };
 
         const lev = LeverageState.clamp(ui.leverage.value, ui.leverage.max);
-        const nonce = @as(u64, @intCast(std.time.milliTimestamp()));
+        const nonce = @as(u64, @intCast(nowMs()));
         const ul = types.UpdateLeverage{
             .asset = asset,
             .is_cross = ui.leverage.is_cross,
@@ -2161,13 +2397,8 @@ const Rest = struct {
     }
 
     fn fetchCandles(client: *Client, coin: []const u8, interval: []const u8, out: *[Chart.MAX_CANDLES]Chart.Candle, count: *usize) void {
-        const now: u64 = @intCast(std.time.milliTimestamp());
-        const lookback: u64 = if (std.mem.eql(u8, interval, "1m")) 3600_000 * 8
-            else if (std.mem.eql(u8, interval, "5m")) 3600_000 * 42
-            else if (std.mem.eql(u8, interval, "15m")) 3600_000 * 120
-            else if (std.mem.eql(u8, interval, "1h")) 3600_000 * 500
-            else if (std.mem.eql(u8, interval, "4h")) 3600_000 * 2000
-            else 3600_000 * 8760;
+        const now: u64 = @intCast(nowMs());
+        const lookback: u64 = if (std.mem.eql(u8, interval, "1m")) 3600_000 * 8 else if (std.mem.eql(u8, interval, "5m")) 3600_000 * 42 else if (std.mem.eql(u8, interval, "15m")) 3600_000 * 120 else if (std.mem.eql(u8, interval, "1h")) 3600_000 * 500 else if (std.mem.eql(u8, interval, "4h")) 3600_000 * 2000 else 3600_000 * 8760;
         var typed = client.getCandleSnapshot(coin, interval, now -| lookback, now) catch return;
         defer typed.deinit();
         var n: usize = 0;
@@ -2175,8 +2406,10 @@ const Rest = struct {
             if (n >= Chart.MAX_CANDLES) break;
             out[n] = .{
                 .t = @as(i64, @intCast(candle.t)),
-                .o = decToF64(candle.o), .h = decToF64(candle.h),
-                .l = decToF64(candle.l), .c = decToF64(candle.c),
+                .o = decToF64(candle.o),
+                .h = decToF64(candle.h),
+                .l = decToF64(candle.l),
+                .c = decToF64(candle.c),
                 .v = decToF64(candle.v),
             };
             n += 1;
@@ -2212,8 +2445,12 @@ const Rest = struct {
             ml = copyTo(&mb, state.marginSummary.totalMarginUsed.normalize().toString(&mu_str) catch "0");
             avl = copyTo(&avb, state.withdrawable.normalize().toString(&wd_str) catch "0");
             pos.n_cols = 6;
-            pos.setHeader(0, "Coin"); pos.setHeader(1, "Side"); pos.setHeader(2, "Size");
-            pos.setHeader(3, "Entry"); pos.setHeader(4, "Lev"); pos.setHeader(5, "uPnL");
+            pos.setHeader(0, "Coin");
+            pos.setHeader(1, "Side");
+            pos.setHeader(2, "Size");
+            pos.setHeader(3, "Entry");
+            pos.setHeader(4, "Lev");
+            pos.setHeader(5, "uPnL");
             for (state.assetPositions) |ap| {
                 if (pos.n_rows >= MAX_ROWS) break;
                 const p = ap.position;
@@ -2221,17 +2458,27 @@ const Rest = struct {
                 if (sz_f == 0) continue;
                 if (std.ascii.eqlIgnoreCase(p.coin, coin)) {
                     if (p.leverage) |lev| {
-                        lev_len = (std.fmt.bufPrint(&lev_buf, "{d}", .{lev.value}) catch "").len;
+                        const lev_text = std.fmt.bufPrint(&lev_buf, "{d}", .{lev.value}) catch "?";
+                        lev_len = lev_text.len;
                         lev_cross = !std.ascii.eqlIgnoreCase(lev.type, "isolated");
                     }
                 }
                 const r = pos.n_rows;
                 pos.set(r, 0, p.coin);
-                if (sz_f > 0) { pos.set(r, 1, "LONG"); pos.row_colors[r] = .positive; } else { pos.set(r, 1, "SHORT"); pos.row_colors[r] = .negative; }
+                if (sz_f > 0) {
+                    pos.set(r, 1, "LONG");
+                    pos.row_colors[r] = .positive;
+                } else {
+                    pos.set(r, 1, "SHORT");
+                    pos.row_colors[r] = .negative;
+                }
                 var sb: [20]u8 = undefined;
                 const abs_szi = Decimal{ .mantissa = @intCast(@abs(p.szi.mantissa)), .scale = p.szi.scale };
                 pos.set(r, 2, abs_szi.normalize().toString(&sb) catch "?");
-                if (p.entryPx) |ep| { var eb: [20]u8 = undefined; pos.set(r, 3, ep.normalize().toString(&eb) catch "?"); }
+                if (p.entryPx) |ep| {
+                    var eb: [20]u8 = undefined;
+                    pos.set(r, 3, ep.normalize().toString(&eb) catch "?");
+                }
                 if (p.leverage) |lev| {
                     var lb: [16]u8 = undefined;
                     pos.set(r, 4, std.fmt.bufPrint(&lb, "{d}x {s}", .{ lev.value, lev.type }) catch "?");
@@ -2253,8 +2500,12 @@ const Rest = struct {
             var typed = client.getOpenOrders(addr, null) catch break :blk_ords;
             defer typed.deinit();
             ords.n_cols = 6;
-            ords.setHeader(0, "Coin"); ords.setHeader(1, "Side"); ords.setHeader(2, "Size");
-            ords.setHeader(3, "Price"); ords.setHeader(4, "Type"); ords.setHeader(5, "OID");
+            ords.setHeader(0, "Coin");
+            ords.setHeader(1, "Side");
+            ords.setHeader(2, "Size");
+            ords.setHeader(3, "Price");
+            ords.setHeader(4, "Type");
+            ords.setHeader(5, "OID");
             for (typed.value) |o| {
                 if (ords.n_rows >= MAX_ROWS) break;
                 const r = ords.n_rows;
@@ -2279,8 +2530,12 @@ const Rest = struct {
             var typed = client.getUserFills(addr) catch break :blk_trades;
             defer typed.deinit();
             trades.n_cols = 7;
-            trades.setHeader(0, "Time"); trades.setHeader(1, "Coin"); trades.setHeader(2, "Direction");
-            trades.setHeader(3, "Price"); trades.setHeader(4, "Size"); trades.setHeader(5, "Value");
+            trades.setHeader(0, "Time");
+            trades.setHeader(1, "Coin");
+            trades.setHeader(2, "Direction");
+            trades.setHeader(3, "Price");
+            trades.setHeader(4, "Size");
+            trades.setHeader(5, "Value");
             trades.setHeader(6, "Fee");
             for (typed.value) |f| {
                 if (trades.n_rows >= MAX_ROWS) break;
@@ -2309,12 +2564,15 @@ const Rest = struct {
 
         // 4. Funding History (typed)
         blk_fund: {
-            const now: u64 = @intCast(std.time.milliTimestamp());
+            const now: u64 = @intCast(nowMs());
             var typed = client.getUserFunding(addr, now -| 86400_000 * 7, null) catch break :blk_fund;
             defer typed.deinit();
             funding.n_cols = 5;
-            funding.setHeader(0, "Time"); funding.setHeader(1, "Coin"); funding.setHeader(2, "Size");
-            funding.setHeader(3, "Payment"); funding.setHeader(4, "Rate");
+            funding.setHeader(0, "Time");
+            funding.setHeader(1, "Coin");
+            funding.setHeader(2, "Size");
+            funding.setHeader(3, "Payment");
+            funding.setHeader(4, "Rate");
             for (typed.value) |f| {
                 if (funding.n_rows >= MAX_ROWS) break;
                 const r = funding.n_rows;
@@ -2341,8 +2599,12 @@ const Rest = struct {
             var typed = client.getHistoricalOrders(addr) catch break :blk_hist;
             defer typed.deinit();
             ord_hist.n_cols = 7;
-            ord_hist.setHeader(0, "Time"); ord_hist.setHeader(1, "Coin"); ord_hist.setHeader(2, "Side");
-            ord_hist.setHeader(3, "Size"); ord_hist.setHeader(4, "Price"); ord_hist.setHeader(5, "Status");
+            ord_hist.setHeader(0, "Time");
+            ord_hist.setHeader(1, "Coin");
+            ord_hist.setHeader(2, "Side");
+            ord_hist.setHeader(3, "Size");
+            ord_hist.setHeader(4, "Price");
+            ord_hist.setHeader(5, "Status");
             ord_hist.setHeader(6, "OID");
             for (typed.value) |ho| {
                 if (ord_hist.n_rows >= MAX_ROWS) break;
@@ -2377,7 +2639,9 @@ const Rest = struct {
             var typed = client.getSpotBalances(addr) catch break :blk_bals;
             defer typed.deinit();
             bals.n_cols = 3;
-            bals.setHeader(0, "Token"); bals.setHeader(1, "Balance"); bals.setHeader(2, "Available");
+            bals.setHeader(0, "Token");
+            bals.setHeader(1, "Balance");
+            bals.setHeader(2, "Available");
             for (typed.value.balances) |b| {
                 if (bals.n_rows >= MAX_ROWS) break;
                 const total_f = decToF64(b.total);
@@ -2392,7 +2656,8 @@ const Rest = struct {
                 bals.set(r, 2, std.fmt.bufPrint(&ab_buf, "{d:.6}", .{avail_f}) catch "?");
                 if (std.ascii.eqlIgnoreCase(b.coin, "USDC")) {
                     var usdc_buf: [24]u8 = undefined;
-                    spot_usdc_len = (std.fmt.bufPrint(&usdc_buf, "{d:.6}", .{avail_f}) catch "0").len;
+                    const usdc_text = std.fmt.bufPrint(&usdc_buf, "{d:.6}", .{avail_f}) catch "0";
+                    spot_usdc_len = usdc_text.len;
                     @memcpy(spot_usdc[0..spot_usdc_len], usdc_buf[0..spot_usdc_len]);
                 }
                 bals.n_rows += 1;
@@ -2480,7 +2745,7 @@ fn fmtF64(buf: *[12]u8, v: f64) []const u8 {
 }
 
 fn samplePerf(ui: *UiState) bool {
-    const now = std.time.milliTimestamp();
+    const now = nowMs();
     if (ui.perf_last_ms != 0 and now - ui.perf_last_ms < PERF_SAMPLE_MS) return false;
     ui.perf_last_ms = now;
 
@@ -2532,11 +2797,14 @@ fn currentRssKbMac() u64 {
 }
 
 fn currentRssKbLinux() u64 {
-    var file = std.fs.openFileAbsolute("/proc/self/statm", .{}) catch return 0;
-    defer file.close();
+    const fd = std.c.open("/proc/self/statm", .{ .ACCMODE = .RDONLY });
+    if (fd < 0) return 0;
+    defer _ = std.c.close(fd);
+
     var buf: [128]u8 = undefined;
-    const n = file.readAll(&buf) catch return 0;
+    const n = std.posix.read(fd, &buf) catch return 0;
     if (n == 0) return 0;
+
     var it = std.mem.tokenizeAny(u8, buf[0..n], " \t\r\n");
     _ = it.next() orelse return 0; // total pages
     const rss_pages_s = it.next() orelse return 0;
@@ -2547,21 +2815,32 @@ fn currentRssKbLinux() u64 {
 
 fn buildInfoFromCtx(ctx: resp_types.AssetContext) InfoData {
     var info = InfoData{};
-    if (ctx.markPx) |mp| { var b: [24]u8 = undefined; info.mark_len = copyTo(&info.mark_buf, mp.normalize().toString(&b) catch "0"); }
-    if (ctx.oraclePx) |op| { var b: [24]u8 = undefined; info.oracle_len = copyTo(&info.oracle_buf, op.normalize().toString(&b) catch "0"); }
-    { var b: [24]u8 = undefined; info.oi_len = copyTo(&info.oi_buf, ctx.openInterest.normalize().toString(&b) catch "0"); }
-    { var b: [24]u8 = undefined; info.funding_len = copyTo(&info.funding_buf, ctx.funding.normalize().toString(&b) catch "0"); }
+    if (ctx.markPx) |mp| {
+        var b: [24]u8 = undefined;
+        info.mark_len = copyTo(&info.mark_buf, mp.normalize().toString(&b) catch "0");
+    }
+    if (ctx.oraclePx) |op| {
+        var b: [24]u8 = undefined;
+        info.oracle_len = copyTo(&info.oracle_buf, op.normalize().toString(&b) catch "0");
+    }
+    {
+        var b: [24]u8 = undefined;
+        info.oi_len = copyTo(&info.oi_buf, ctx.openInterest.normalize().toString(&b) catch "0");
+    }
+    {
+        var b: [24]u8 = undefined;
+        info.funding_len = copyTo(&info.funding_buf, ctx.funding.normalize().toString(&b) catch "0");
+    }
     const prev_f = if (ctx.prevDayPx) |pp| decToF64(pp) else 0;
     const mark_f = if (ctx.markPx) |mp| decToF64(mp) else 0;
     if (prev_f > 0) {
         const chg = mark_f - prev_f;
         info.is_negative_change = chg < 0;
-        info.change_len = (std.fmt.bufPrint(&info.change_buf, "{d:.0} / {d:.2}%", .{ chg, chg / prev_f * 100 }) catch "").len;
+        const change_text = std.fmt.bufPrint(&info.change_buf, "{d:.0} / {d:.2}%", .{ chg, chg / prev_f * 100 }) catch "?";
+        info.change_len = change_text.len;
     }
     const vol_f = if (ctx.dayNtlVlm) |v| decToF64(v) else 0;
-    const vs = if (vol_f > 1e9) std.fmt.bufPrint(&info.volume_buf, "${d:.2}B", .{vol_f / 1e9}) catch ""
-        else if (vol_f > 1e6) std.fmt.bufPrint(&info.volume_buf, "${d:.1}M", .{vol_f / 1e6}) catch ""
-        else std.fmt.bufPrint(&info.volume_buf, "${d:.0}", .{vol_f}) catch "";
+    const vs = if (vol_f > 1e9) std.fmt.bufPrint(&info.volume_buf, "${d:.2}B", .{vol_f / 1e9}) catch "?" else if (vol_f > 1e6) std.fmt.bufPrint(&info.volume_buf, "${d:.1}M", .{vol_f / 1e6}) catch "?" else std.fmt.bufPrint(&info.volume_buf, "${d:.0}", .{vol_f}) catch "?";
     info.volume_len = vs.len;
     return info;
 }
@@ -2671,7 +2950,10 @@ fn loadPickerMids(p: *PickerState, client: *Client) void {
 fn getMidStr(val: std.json.Value, coin: []const u8) ?[]const u8 {
     // Direct lookup — works for perps (BTC), outcomes (#12730), and canonical spot pairs (PURR/USDC)
     const v = val.object.get(coin) orelse return null;
-    return switch (v) { .string => |s| s, else => null };
+    return switch (v) {
+        .string => |s| s,
+        else => null,
+    };
 }
 
 // ╔══════════════════════════════════════════════════════════════════╗
@@ -2684,20 +2966,30 @@ pub fn run(allocator: std.mem.Allocator, config_in: Config, coin: []const u8) !v
     ui.coin_len = @min(coin.len, 16);
     for (0..ui.coin_len) |i| ui.coin[i] = std.ascii.toUpper(coin[i]);
 
-    var ui_client = switch (config.chain) { .mainnet => Client.mainnet(allocator), .testnet => Client.testnet(allocator) };
+    var ui_client = switch (config.chain) {
+        .mainnet => Client.mainnet(allocator),
+        .testnet => Client.testnet(allocator),
+    };
     defer ui_client.deinit();
-    var worker_client = switch (config.chain) { .mainnet => Client.mainnet(allocator), .testnet => Client.testnet(allocator) };
+    var worker_client = switch (config.chain) {
+        .mainnet => Client.mainnet(allocator),
+        .testnet => Client.testnet(allocator),
+    };
     defer worker_client.deinit();
 
-    var app = App.init(allocator) catch {
-        std.fs.File.stderr().writeAll("error: requires an interactive terminal\n") catch {};
+    var app = App.init(allocator, runtime.io()) catch {
+        stderrWriteAll("error: requires an interactive terminal\n");
         return;
     };
     defer app.deinit();
 
     var shared = Shared{};
     shared.setInterval(ui.interval);
-    { shared.mu.lock(); defer shared.mu.unlock(); shared.setCoin(ui.coin[0..ui.coin_len]); }
+    {
+        shared.mu.lock();
+        defer shared.mu.unlock();
+        shared.setCoin(ui.coin[0..ui.coin_len]);
+    }
 
     const user_addr = config.getAddress();
     const ws_w = std.Thread.spawn(.{}, WsWorker.run, .{ &shared, allocator, config.chain, user_addr }) catch return;
@@ -2716,15 +3008,13 @@ pub fn run(allocator: std.mem.Allocator, config_in: Config, coin: []const u8) !v
         // 1. Input
         var dirty = false;
         while (app.pollKey()) |key| {
-            if (ui.picker.open) Input.handlePicker(key, &ui, &shared)
-            else if (key == .char and key.char == '/') {
+            if (ui.picker.open) Input.handlePicker(key, &ui, &shared) else if (key == .char and key.char == '/') {
                 ui.picker.open = true;
                 ui.picker.reset();
-            }
-            else Input.handleKey(key, &ui, &app.running, &ui_client, &config, &shared);
+            } else Input.handleKey(key, &ui, &app.running, &ui_client, &config, &shared);
             dirty = true;
         }
-        if (ui.order.expireStatus(std.time.milliTimestamp(), STATUS_TTL_MS)) dirty = true;
+        if (ui.order.expireStatus(nowMs(), STATUS_TTL_MS)) dirty = true;
         if (!app.running) break;
 
         // 2. Sync UI → shared
@@ -2736,15 +3026,21 @@ pub fn run(allocator: std.mem.Allocator, config_in: Config, coin: []const u8) !v
             shared.setInterval(ui.interval);
             shared.depth = ui.book_depth;
         }
-        if (iv_changed) { const fd = shared.ws_fd.load(.acquire); if (fd != -1) _ = std.c.shutdown(fd, 2); }
+        if (iv_changed) {
+            const fd = shared.ws_fd.load(.acquire);
+            if (fd != -1) _ = std.c.shutdown(fd, 2);
+        }
 
         // 3. Clamp selection + auto-scroll
         {
             const s = Snapshot.take(&shared);
             const tbl: *const TableData = switch (ui.tab) {
-                .positions => &s.positions, .open_orders => &s.open_orders,
-                .trade_history => &s.trade_history, .funding_history => &s.funding_history,
-                .order_history => &s.order_history, .balances => &s.balances,
+                .positions => &s.positions,
+                .open_orders => &s.open_orders,
+                .trade_history => &s.trade_history,
+                .funding_history => &s.funding_history,
+                .order_history => &s.order_history,
+                .balances => &s.balances,
             };
             if (tbl.n_rows > 0) {
                 ui.selected_row = @min(ui.selected_row, tbl.n_rows - 1);
@@ -2782,6 +3078,6 @@ pub fn run(allocator: std.mem.Allocator, config_in: Config, coin: []const u8) !v
         }
 
         // 5. Sleep
-        std.Thread.sleep(4_000_000);
+        sleepNs(4_000_000);
     }
 }
