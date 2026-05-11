@@ -8,7 +8,7 @@
 //!   - Fixed tick rate
 //!
 //! Usage:
-//!   var app = try App.init(allocator);
+//!   var app = try App.init(allocator, io);
 //!   defer app.deinit();
 //!   while (app.running) {
 //!       app.beginFrame();
@@ -34,9 +34,9 @@ running: bool = true,
 tick_ns: u64 = 200_000_000, // 200ms = 5 FPS default
 frame: u64 = 0,
 
-pub fn init(allocator: std.mem.Allocator) !App {
-    const term = try Terminal.init();
-    Terminal.clear();
+pub fn init(allocator: std.mem.Allocator, io: std.Io) !App {
+    const term = try Terminal.init(io);
+    Terminal.clear(io);
     const w = term.width;
     const h = term.height;
     const buf = try Buffer.init(allocator, w, h);
@@ -70,21 +70,25 @@ pub fn beginFrame(self: *App) void {
         self.buf.resize(self.term.width, self.term.height) catch return;
         self.prev.resize(self.term.width, self.term.height) catch return;
         self.prev.clear();
-        Terminal.clear();
+        Terminal.clear(self.term.io);
     }
     self.buf.clear();
 }
 
 /// End frame: diff-flush and swap buffers.
 pub fn endFrame(self: *App) void {
-    self.buf.flush(&self.prev);
+    self.buf.flush(&self.prev, self.term.io);
     @memcpy(self.prev.cells, self.buf.cells);
     self.frame += 1;
 }
 
 /// Sleep for the tick interval.
 pub fn tick(self: *App) void {
-    std.Thread.sleep(self.tick_ns);
+    std.Io.sleep(
+        self.term.io,
+        std.Io.Duration.fromNanoseconds(@intCast(self.tick_ns)),
+        .awake,
+    ) catch {};
 }
 
 /// Poll for a key (non-blocking).

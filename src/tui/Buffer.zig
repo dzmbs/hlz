@@ -240,7 +240,10 @@ pub fn putBar(self: *Buffer, x: u16, y: u16, value: f64, max_value: f64, width: 
 
     var col = x;
     var i: usize = 0;
-    while (i < full and col < x + width and col < self.width) : ({ i += 1; col += 1; }) {
+    while (i < full and col < x + width and col < self.width) : ({
+        i += 1;
+        col += 1;
+    }) {
         const cell = self.get(col, y);
         cell.setUtf8(&full_block);
         cell.style = style;
@@ -366,9 +369,9 @@ fn emitColor(buf: []u8, pos_in: usize, color: Color, is_bg: bool) usize {
 const BSU = "\x1b[?2026h";
 const ESU = "\x1b[?2026l";
 
-pub fn flush(self: *const Buffer, prev: *const Buffer) void {
-    const t0 = std.time.nanoTimestamp();
-    const stdout = std.fs.File.stdout();
+pub fn flush(self: *const Buffer, prev: *const Buffer, io: std.Io) void {
+    const t0 = std.Io.Clock.awake.now(io).toNanoseconds();
+    const stdout = std.Io.File.stdout();
     var out_buf: [131072]u8 = undefined;
     var pos: usize = 0;
     var s_scanned: u32 = 0;
@@ -396,7 +399,10 @@ pub fn flush(self: *const Buffer, prev: *const Buffer) void {
             const cur = self.getConst(x, y);
             const prv = if (same_size) prev.getConst(x, y) else Cell{};
             s_scanned += 1;
-            if (cur.eql(prv)) { s_elides += 1; continue; }
+            if (cur.eql(prv)) {
+                s_elides += 1;
+                continue;
+            }
             s_changed += 1;
 
             // ── Cursor movement (absolute CUP — safe, no desync) ──
@@ -435,12 +441,16 @@ pub fn flush(self: *const Buffer, prev: *const Buffer) void {
                 pos = emitColor(&out_buf, pos, s.fg, false);
                 cur_fg = s.fg;
                 s_emits += 1;
-            } else { s_elides += 1; }
+            } else {
+                s_elides += 1;
+            }
             if (!s.bg.eql(cur_bg)) {
                 pos = emitColor(&out_buf, pos, s.bg, true);
                 cur_bg = s.bg;
                 s_emits += 1;
-            } else { s_elides += 1; }
+            } else {
+                s_elides += 1;
+            }
 
             // ── Character ──
             const ch = cur.char[0..cur.char_len];
@@ -454,7 +464,7 @@ pub fn flush(self: *const Buffer, prev: *const Buffer) void {
 
             // Flush if buffer getting full
             if (pos > out_buf.len - 512) {
-                stdout.writeAll(out_buf[0..pos]) catch {};
+                stdout.writeStreamingAll(io, out_buf[0..pos]) catch {};
                 pos = 0;
             }
         }
@@ -467,9 +477,9 @@ pub fn flush(self: *const Buffer, prev: *const Buffer) void {
         pos += tail.len;
     }
 
-    if (pos > 0) stdout.writeAll(out_buf[0..pos]) catch {};
+    if (pos > 0) stdout.writeStreamingAll(io, out_buf[0..pos]) catch {};
 
-    const t1 = std.time.nanoTimestamp();
+    const t1 = std.Io.Clock.awake.now(io).toNanoseconds();
     stats = .{
         .cells_scanned = s_scanned,
         .cells_changed = s_changed,

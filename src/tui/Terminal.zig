@@ -7,6 +7,7 @@ const posix = std.posix;
 
 const Terminal = @This();
 
+io: std.Io,
 orig_termios: posix.termios,
 width: u16,
 height: u16,
@@ -14,13 +15,13 @@ is_raw: bool = false,
 is_alt: bool = false,
 
 /// Enter raw mode and alternate screen. Returns terminal dimensions.
-pub fn init() !Terminal {
-    const stdout = std.fs.File.stdout();
+pub fn init(io: std.Io) !Terminal {
+    const stdout = std.Io.File.stdout();
     const fd = stdout.handle;
 
     // Check if stdout and stdin are terminals
-    if (!std.posix.isatty(fd)) return error.NotATerminal;
-    if (!std.posix.isatty(std.fs.File.stdin().handle)) return error.NotATerminal;
+    if (!(try stdout.isTty(io))) return error.NotATerminal;
+    if (!(try std.Io.File.stdin().isTty(io))) return error.NotATerminal;
 
     // Get original termios
     const orig = try posix.tcgetattr(fd);
@@ -47,9 +48,10 @@ pub fn init() !Terminal {
     try posix.tcsetattr(fd, .FLUSH, raw);
 
     // Enter alternate screen + hide cursor
-    stdout.writeAll("\x1b[?1049h\x1b[?25l") catch {};
+    stdout.writeStreamingAll(io, "\x1b[?1049h\x1b[?25l") catch {};
 
     return .{
+        .io = io,
         .orig_termios = orig,
         .width = size.cols,
         .height = size.rows,
@@ -60,10 +62,10 @@ pub fn init() !Terminal {
 
 /// Leave raw mode and alternate screen.
 pub fn deinit(self: *Terminal) void {
-    const stdout = std.fs.File.stdout();
+    const stdout = std.Io.File.stdout();
     // Show cursor + leave alternate screen
     if (self.is_alt) {
-        stdout.writeAll("\x1b[?25h\x1b[?1049l") catch {};
+        stdout.writeStreamingAll(self.io, "\x1b[?25h\x1b[?1049l") catch {};
         self.is_alt = false;
     }
     // Restore original termios
@@ -75,21 +77,21 @@ pub fn deinit(self: *Terminal) void {
 
 /// Refresh terminal size.
 pub fn refreshSize(self: *Terminal) void {
-    const size = getSize(std.fs.File.stdout().handle);
+    const size = getSize(std.Io.File.stdout().handle);
     self.width = size.cols;
     self.height = size.rows;
 }
 
 /// Move cursor to position.
-pub fn moveTo(col: u16, row: u16) void {
+pub fn moveTo(io: std.Io, col: u16, row: u16) void {
     var buf: [32]u8 = undefined;
     const s = std.fmt.bufPrint(&buf, "\x1b[{d};{d}H", .{ row + 1, col + 1 }) catch return;
-    std.fs.File.stdout().writeAll(s) catch {};
+    std.Io.File.stdout().writeStreamingAll(io, s) catch {};
 }
 
 /// Clear the entire screen.
-pub fn clear() void {
-    std.fs.File.stdout().writeAll("\x1b[2J\x1b[1;1H") catch {};
+pub fn clear(io: std.Io) void {
+    std.Io.File.stdout().writeStreamingAll(io, "\x1b[2J\x1b[1;1H") catch {};
 }
 
 const WinSize = struct { rows: u16, cols: u16 };
@@ -108,7 +110,6 @@ fn getSize(fd: posix.fd_t) WinSize {
     }
     return .{ .rows = 24, .cols = 80 }; // fallback
 }
-
 
 pub const Key = union(enum) {
     char: u8,
@@ -153,7 +154,7 @@ fn ringConsume(n: usize) void {
 pub fn pollKey() ?Key {
     // Fill ring from stdin (non-blocking)
     var tmp: [32]u8 = undefined;
-    const n = std.posix.read(std.fs.File.stdin().handle, &tmp) catch 0;
+    const n = std.posix.read(std.Io.File.stdin().handle, &tmp) catch 0;
     if (n > 0) ringPush(tmp[0..n]);
 
     if (ringLen() == 0) return null;
