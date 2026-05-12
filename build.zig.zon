@@ -2,11 +2,11 @@
     .name = .hyperzig,
     .version = "0.1.0",
     .fingerprint = 0xba95a5e761204227,
-    .minimum_zig_version = "0.15.2",
+    .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .websocket = .{
-            .url = "git+https://github.com/karlseguin/websocket.zig#97fefafa59cc78ce177cff540b8685cd7f699276",
-            .hash = "websocket-0.1.0-ZPISdRlzAwBB_Bz2UMMqxYqF6YEVTIBoFsbzwPUJTHIc",
+            .url = "git+https://github.com/karlseguin/websocket.zig#d823a7d8cb3e43b3789208ae499bfe1d077de8ee",
+            .hash = "websocket-0.1.0-ZPISdUQ6BAAuDI1LbcOpeUAMHk5sIvvWmcSl1wFSFL62",
         },
     },
     .paths = .{
