@@ -2,6 +2,8 @@
 
 hlz is designed for AI agents and automated workflows. Every command works non-interactively with structured output.
 
+Most commands return a JSON envelope like `{v,status,cmd,data,timing_ms}`. The `stream` command is the exception: it emits raw line-delimited channel messages.
+
 ## Design Guarantees
 
 | Property | Guarantee |
@@ -69,8 +71,9 @@ cat orders.txt | hlz batch --stdin --json
 
 ```bash
 # Capture full state as JSON
-hlz portfolio --json > snapshot_$(date +%s).json
-hlz orders --json >> snapshot_$(date +%s).json
+STAMP=$(date +%s)
+hlz portfolio --json > portfolio_$STAMP.json
+hlz orders --json > orders_$STAMP.json
 ```
 
 ## Environment Variables

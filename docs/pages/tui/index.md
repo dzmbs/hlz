@@ -20,8 +20,8 @@ We needed a small TUI layer for the trading terminal and interactive list views.
 ## How It Fits Together
 
 ```
-App.init()
-  ├── Terminal.init()    enters raw mode
+App.init(allocator, io)
+  ├── Terminal.init(io)  enters raw mode
   └── Buffer.init()      allocates cell grids
 
 loop:
@@ -49,23 +49,29 @@ app.deinit()
 ## Quick Example
 
 ```zig
+const std = @import("std");
 const tui = @import("tui");
 
-var app = try tui.App.init();
-defer app.deinit();
+pub fn main(init: std.process.Init) !void {
+    var app = try tui.App.init(init.gpa, init.io);
+    defer app.deinit();
 
-while (true) {
-    app.beginFrame();
+    while (true) {
+        app.beginFrame();
 
-    const size = app.size();
-    app.buf.putStr(0, 0, "Hello from hlz TUI!", .{
-        .fg = .{ .rgb = .{ 0xf7, 0xa4, 0x1d } },
-    });
+        _ = app.fullRect();
+        app.buf.putStr(0, 0, "Hello from hlz TUI!", .{
+            .fg = .{ .rgb = .{ 0xf7, 0xa4, 0x1d } },
+        });
 
-    if (app.pollKey()) |key| {
-        if (key == 'q') break;
+        if (app.pollKey()) |key| {
+            switch (key) {
+                .char => |c| if (c == 'q') break,
+                else => {},
+            }
+        }
+
+        app.endFrame();
     }
-
-    app.endFrame();
 }
 ```

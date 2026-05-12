@@ -41,10 +41,10 @@ echo $?
 ## Checking Balance
 
 ```bash
-hlz balance --json | jq '.accountValue'
+hlz balance --json | jq '.data.perp.marginSummary.accountValue'
 
-# Or just the number
-hlz balance -q
+# Spot transfer balances
+hlz balance --json | jq '.data.spot.balances[] | select(.coin == "USDC") | .total'
 ```
 
 ## Spot vs Perps Balance
@@ -77,5 +77,5 @@ fi
 USDC, HYPE, and any listed spot token:
 
 ```bash
-hlz spot --json | jq '.[].symbol'
+hlz spot --json | jq -r '.data.tokens[].name'
 ```

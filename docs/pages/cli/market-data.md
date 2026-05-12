@@ -38,7 +38,7 @@ hlz price HYPE --quote USDH       # → HYPE/USDH spot price
 hlz price HYPE --all
 # Shows: HYPE perp, HYPE/USDC, HYPE/USDT0, HYPE/USDH, HYPE/USDE
 
-hlz price HYPE --all --json
+hlz price HYPE --all --json | jq '.data'
 # [{"market":"HYPE","type":"perp","venue":"hl","price":27.08},
 #  {"market":"HYPE/USDC","type":"spot","venue":"USDC","price":27.12}, ...]
 ```
@@ -59,23 +59,23 @@ hlz mids --all              # All markets
 hlz mids --page 2           # Page 2
 hlz mids BTC                # Filter to BTC-related
 
-# JSON output is a {coin: price} object
-hlz mids BTC --json
+# JSON output stores the raw {coin: price} object under .data
+hlz mids BTC --json | jq '.data'
 # {"BTC":"65000.5","UBTC/USDC":"65012.3"}
 
-hlz mids --json | jq '.BTC'
+hlz mids --json | jq '.data.BTC'
 ```
 
 ## `hlz funding [--top N]`
 
-Funding rates with visual heat bars. `--json` returns a clean filtered array.
+Funding rates with visual heat bars. `--json` returns a clean filtered array under `.data`.
 
 ```bash
 hlz funding                 # Top 20 by absolute rate
 hlz funding --top 5         # Top 5
 hlz funding --filter ETH    # Search
 
-hlz funding --top 3 --json
+hlz funding --top 3 --json | jq '.data'
 # [{"coin":"MAVIA","funding":0.00081,"annualized":718.04,"mark":"0.033"},...]
 ```
 
@@ -97,7 +97,10 @@ hlz perps                   # Hyperliquid native markets
 hlz perps --dex xyz         # HIP-3 DEX markets
 hlz perps --all             # All DEXes combined
 hlz perps --filter BTC      # Search markets
+hlz perps --json | jq '.data.universe[0]'
 ```
+
+`--json` returns the raw `meta` response under `.data`, e.g. `.data.universe` and `.data.marginTables`.
 
 ## `hlz spot [--all]`
 
@@ -106,7 +109,10 @@ List spot markets.
 ```bash
 hlz spot                    # Top spot markets
 hlz spot --all              # All spot markets
+hlz spot --json | jq -r '.data.tokens[].name'
 ```
+
+`--json` returns the raw `spotMeta` response under `.data`, e.g. `.data.tokens` and `.data.universe`.
 
 ## `hlz outcomes [--all]`
 
@@ -131,8 +137,10 @@ hlz book '#12731'               # BTC price binary, side 1 (No)
 hlz mids --chain testnet | grep '#'
 
 # JSON output includes questions (grouped outcomes)
-hlz outcomes --json
+hlz outcomes --json | jq '.data.questions'
 ```
+
+`--json` returns the raw `outcomeMeta` response under `.data`, with `.data.outcomes` and `.data.questions`.
 
 ## `hlz dexes`
 
@@ -140,4 +148,7 @@ List available HIP-3 DEXes with their collateral tokens.
 
 ```bash
 hlz dexes
+hlz dexes --json | jq '.data[1]'
 ```
+
+`--json` returns the raw `perpDexs` response under `.data`.

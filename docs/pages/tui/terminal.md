@@ -10,8 +10,13 @@ Entering raw mode disables:
 - Signal handling for Ctrl+C (you handle it yourself)
 
 ```zig
-var term = try tui.Terminal.init();  // enters raw mode
-defer term.deinit();                  // restores cooked mode
+const std = @import("std");
+const tui = @import("tui");
+
+pub fn main(init: std.process.Init) !void {
+    var term = try tui.Terminal.init(init.io); // enters raw mode
+    defer term.deinit(); // restores cooked mode
+}
 ```
 
 Always pair `init` with `deinit` via `defer`. If your program crashes without restoring cooked mode, the terminal will be unusable (run `reset` to fix).
@@ -19,8 +24,8 @@ Always pair `init` with `deinit` via `defer`. If your program crashes without re
 ## Terminal Size
 
 ```zig
-const size = term.getSize();
-// size.rows, size.cols
+term.refreshSize();
+// term.width, term.height
 ```
 
 ## Input

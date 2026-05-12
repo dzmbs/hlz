@@ -142,7 +142,7 @@ hlz sell ETH 1.0
 hlz stream trades BTC | jq '.sz'
 
 # Pipe-aware: JSON when piped, tables on TTY
-hlz positions --json | jq '.[] | {coin, pnl}'
+hlz positions --json | jq '.data.assetPositions[] | .position | {coin, unrealizedPnl}'
 ```
 
 {/* ── Numbers ── */}

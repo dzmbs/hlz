@@ -15,7 +15,7 @@
   <img src="https://img.shields.io/badge/license-MIT-green" alt="license" />
   <img src="https://img.shields.io/badge/status-beta-orange" alt="status" />
   <img src="https://img.shields.io/badge/platform-macOS_|_Linux-blue" alt="platform" />
-  <img src="https://img.shields.io/badge/zig-0.15.2-F7A41D?logo=zig&logoColor=white" alt="zig" />
+  <img src="https://img.shields.io/badge/zig-0.16.0-F7A41D?logo=zig&logoColor=white" alt="zig" />
 </p>
 
 <p align="center">
@@ -52,7 +52,7 @@ curl -fsSL https://raw.githubusercontent.com/dzmbs/hlz/main/install.sh | sh
 
 Or download a binary manually from [Releases](../../releases/latest).
 
-**From source** (requires [Zig 0.15.2](https://ziglang.org/download/)):
+**From source** (requires [Zig 0.16.0](https://ziglang.org/download/)):
 
 ```bash
 git clone https://github.com/dzmbs/hlz
@@ -253,7 +253,7 @@ Built for automation and AI agents:
 ```bash
 PRICE=$(hlz price BTC -q)
 hlz buy BTC 0.1 @${PRICE} --json
-hlz orders --json | jq '.[] | select(.coin == "BTC")'
+hlz orders --json | jq '.data[] | select(.coin == "BTC")'
 ```
 
 ---

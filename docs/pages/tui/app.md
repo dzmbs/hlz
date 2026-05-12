@@ -5,32 +5,35 @@
 ## Usage
 
 ```zig
+const std = @import("std");
 const tui = @import("tui");
 
-var app = try tui.App.init();
-defer app.deinit();  // restores terminal to cooked mode
+pub fn main(init: std.process.Init) !void {
+    var app = try tui.App.init(init.gpa, init.io);
+    defer app.deinit(); // restores terminal to cooked mode
 
-while (true) {
-    app.beginFrame();
+    while (true) {
+        app.beginFrame();
 
-    // ... render to app.buf ...
+        // ... render to app.buf ...
 
-    if (app.pollKey()) |key| {
-        switch (key) {
-            'q' => break,
-            else => {},
+        if (app.pollKey()) |key| {
+            switch (key) {
+                .char => |c| if (c == 'q') break,
+                else => {},
+            }
         }
-    }
 
-    app.endFrame();  // flushes buffer diff to terminal
+        app.endFrame(); // flushes buffer diff to terminal
+    }
 }
 ```
 
 ## API
 
-### `App.init() -> !App`
+### `App.init(allocator, io) -> !App`
 
-Initializes the terminal in raw mode and allocates the double buffer.
+Initializes the terminal in raw mode and allocates the double buffer. Pass the process `io` from `std.process.Init`.
 
 ### `app.deinit()`
 
@@ -50,9 +53,9 @@ Non-blocking key read. Returns `null` if no key is pressed.
 
 Uses `VTIME=0 VMIN=0` for truly non-blocking reads — no blocking, no busy-wait.
 
-### `app.size() -> struct { rows: u16, cols: u16 }`
+### `app.width()` / `app.height()` / `app.fullRect()`
 
-Returns current terminal dimensions.
+Helpers for current terminal dimensions and the full-screen drawing region.
 
 ### `app.buf`
 

@@ -7,7 +7,7 @@
 
 Zig SDK, CLI, and trading terminal for Hyperliquid.
 
-- **Language**: Zig 0.15.2
+- **Language**: Zig 0.16.0
 - **Binaries**: `hlz` (895KB CLI), `hlz-terminal` (1121KB terminal)
 - **API**: Hyperliquid L1 — https://api.hyperliquid.xyz
 
@@ -44,7 +44,7 @@ Never import upward.
 ## Code Style
 
 ### Zig Conventions
-- `std.fs.File.stdout()` not `std.io.getStdOut()` (removed in 0.15)
+- `std.Io.File.stdout()` not `std.io.getStdOut()` (removed; Zig 0.16 uses `std.Io`)
 - Explicit allocators everywhere, no global state
 - `const` by default, `var` only when mutation needed
 - No `catch {}` on non-trivial operations
@@ -165,7 +165,7 @@ Repo-specific skills in `.pi/skills/`:
 
 - Don't emit `\n` without `\r` in raw terminal mode
 - Don't allocate in render loops
-- Don't use `std.io.getStdOut()` (removed in Zig 0.15)
+- Don't use `std.io.getStdOut()`; use `std.Io.File.stdout()` in Zig 0.16
 - Don't break JSON output shape between versions
 - Don't modify crypto code without running the full crypto test suite
 - Don't change field names/order in `types.zig` without verifying MessagePack output

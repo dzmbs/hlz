@@ -52,7 +52,7 @@ echo "Grid placed: $LEVELS levels, $SPREAD spread"
 # Check positions every 30 seconds, rebalance if needed
 
 while true; do
-  POS=$(hlz positions --json | jq -r '.[] | select(.coin == "BTC") | .szi')
+  POS=$(hlz positions --json | jq -r '.data.assetPositions[] | .position | select(.coin == "BTC") | .szi')
   
   if [ -z "$POS" ]; then
     POS="0"

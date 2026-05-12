@@ -17,7 +17,7 @@ Open perpetual positions.
 
 ```bash
 hlz positions
-hlz positions --json | jq '.[] | {coin, size, pnl}'
+hlz positions --json | jq '.data.assetPositions[] | .position | {coin, szi, unrealizedPnl}'
 ```
 
 ## `hlz orders [ADDR]`
@@ -35,7 +35,7 @@ Recent trade fills.
 
 ```bash
 hlz fills
-hlz fills --json | jq '.[] | select(.coin == "BTC")'
+hlz fills --json | jq '.data[] | select(.coin == "BTC")'
 ```
 
 ## `hlz balance [ADDR]`
@@ -44,6 +44,7 @@ Account balance and margin health.
 
 ```bash
 hlz balance
+hlz balance --json | jq '.data.perp.marginSummary.accountValue'
 ```
 
 ## `hlz status <OID>`
