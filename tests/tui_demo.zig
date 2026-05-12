@@ -5,14 +5,12 @@ const std = @import("std");
 const Terminal = @import("Terminal");
 const Buffer = @import("Buffer");
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const alloc = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const alloc = init.gpa;
 
-    var term = try Terminal.init();
+    var term = try Terminal.init(init.io);
     defer term.deinit();
-    Terminal.clear();
+    Terminal.clear(init.io);
 
     var current = try Buffer.init(alloc, term.width, term.height);
     defer current.deinit();
@@ -84,14 +82,14 @@ pub fn main() !void {
         current.putStr(term.width - @as(u16, @intCast(frame_str.len)) - 1, term.height - 1, frame_str, dim);
 
         // Diff and flush
-        current.flush(&prev);
+        current.flush(&prev, init.io);
 
         // Swap: copy current into prev
         @memcpy(prev.cells, current.cells);
         frame += 1;
 
         // Poll input
-        std.Thread.sleep(50_000_000); // 50ms
+        std.Io.sleep(init.io, std.Io.Duration.fromNanoseconds(50_000_000), .awake) catch {};
         if (Terminal.pollKey()) |key| {
             switch (key) {
                 .char => |c| if (c == 'q') break,

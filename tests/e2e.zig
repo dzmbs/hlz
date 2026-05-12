@@ -670,7 +670,7 @@ fn runExchangeChecks(allocator: std.mem.Allocator, counts: *Counts) !void {
 }
 
 pub fn main() !void {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_state = std.heap.DebugAllocator(.{}){};
     defer {
         const leaked = gpa_state.deinit();
         if (leaked == .leak) std.debug.print("[WARN] allocator reported leaks\n", .{});
