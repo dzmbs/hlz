@@ -1625,6 +1625,8 @@ pub fn placeOrder(allocator: std.mem.Allocator, w: *Writer, config: Config, a: a
                 try w.print(" avg={s}\n", .{decStr(f.avgPx, &avg_buf)});
             },
             .success => try w.success("accepted"),
+            .waitingForTrigger => try w.success("waiting for trigger"),
+            .waitingForFill => try w.success("waiting to fill"),
             .@"error" => |msg| {
                 try w.failFmt("rejected: {s}", .{msg});
                 failed = true;
@@ -4179,6 +4181,8 @@ pub fn batchCmd(allocator: std.mem.Allocator, w: *Writer, config: Config, a: arg
                 try w.print("  [{d}] filled @ {s}\n", .{ idx + 1, decStr(f.avgPx, &ab) });
             },
             .success => try w.print("  [{d}] accepted\n", .{idx + 1}),
+            .waitingForTrigger => try w.print("  [{d}] waiting for trigger\n", .{idx + 1}),
+            .waitingForFill => try w.print("  [{d}] waiting to fill\n", .{idx + 1}),
             .@"error" => |msg| try w.print("  [{d}] error: {s}\n", .{ idx + 1, msg }),
             .unknown => try w.print("  [{d}] unknown\n", .{idx + 1}),
         }

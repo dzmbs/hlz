@@ -32,6 +32,8 @@ pub const ResponseStatus = enum {
 
 pub const OrderResponseStatus = union(enum) {
     success: void,
+    waitingForTrigger: void,
+    waitingForFill: void,
     resting: struct { oid: u64, cloid: ?[]const u8 = null },
     filled: struct { totalSz: ?Decimal = null, avgPx: ?Decimal = null, oid: u64 = 0 },
     @"error": []const u8,
@@ -62,6 +64,8 @@ pub fn parseOrderStatuses(allocator: std.mem.Allocator, obj: std.json.Value) ![]
 fn parseOneOrderStatus(item: std.json.Value) OrderResponseStatus {
     if (item == .string) {
         if (std.mem.eql(u8, item.string, "success")) return .{ .success = {} };
+        if (std.mem.eql(u8, item.string, "waitingForTrigger")) return .{ .waitingForTrigger = {} };
+        if (std.mem.eql(u8, item.string, "waitingForFill")) return .{ .waitingForFill = {} };
         return .{ .@"error" = item.string };
     }
     if (item != .object) return .{ .unknown = {} };
@@ -619,6 +623,13 @@ test "Fill auto-parse" {
     try std.testing.expectEqualStrings("BTC", parsed.value.coin);
     try std.testing.expectEqual(@as(u64, 12345), parsed.value.oid);
     try std.testing.expectEqual(true, parsed.value.crossed);
+}
+
+test "parseOneOrderStatus waitingForTrigger and waitingForFill" {
+    const trigger = std.json.Value{ .string = "waitingForTrigger" };
+    try std.testing.expect(parseOneOrderStatus(trigger) == .waitingForTrigger);
+    const fill = std.json.Value{ .string = "waitingForFill" };
+    try std.testing.expect(parseOneOrderStatus(fill) == .waitingForFill);
 }
 
 test "BasicOrder auto-parse" {

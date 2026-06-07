@@ -2731,6 +2731,8 @@ fn checkOrderResult(alloc: std.mem.Allocator, result: *Client.ExchangeResult, st
         .resting => .{ .ok = true, .msg = "Order resting" },
         .filled => .{ .ok = true, .msg = "Order filled!" },
         .success => .{ .ok = true, .msg = "Order accepted" },
+        .waitingForTrigger => .{ .ok = true, .msg = "Waiting for trigger" },
+        .waitingForFill => .{ .ok = true, .msg = "Waiting to fill" },
         .@"error" => |e| blk: {
             const n = @min(e.len, 48);
             @memcpy(status_buf[0..n], e[0..n]);
