@@ -62,10 +62,20 @@ pub const OrderRequest = struct {
     cloid: Cloid,
 };
 
+/// Builder fee attached to an order action.
+/// Serialized as `{"b": <address>, "f": <tenths_of_bps>}`.
+pub const BuilderInfo = struct {
+    /// Builder address (20 bytes, packed as "0x..." string).
+    address: [20]u8,
+    /// Builder fee in tenths of a basis point. 1 = 0.001%.
+    fee_tenths_bps: u32,
+};
+
 /// Batch of orders to place.
 pub const BatchOrder = struct {
     orders: []const OrderRequest,
     grouping: OrderGrouping,
+    builder: ?BuilderInfo = null,
 };
 
 /// Cancel a single order by exchange-assigned ID.
@@ -229,7 +239,8 @@ pub fn packOrderRequest(p: *msgpack.Packer, order: OrderRequest) msgpack.PackErr
 
 /// Pack a BatchOrder to msgpack.
 pub fn packBatchOrder(p: *msgpack.Packer, batch: BatchOrder) msgpack.PackError!void {
-    try p.packMapHeader(2);
+    const map_size: u32 = if (batch.builder != null) 3 else 2;
+    try p.packMapHeader(map_size);
 
     // orders: array of OrderRequest
     try p.packStr("orders");
@@ -241,6 +252,33 @@ pub fn packBatchOrder(p: *msgpack.Packer, batch: BatchOrder) msgpack.PackError!v
     // grouping: enum string
     try p.packStr("grouping");
     try p.packStr(@tagName(batch.grouping));
+
+    // builder: optional {b: address, f: fee}
+    if (batch.builder) |bi| {
+        try p.packStr("builder");
+        try packBuilderInfo(p, bi);
+    }
+}
+
+fn packBuilderInfo(p: *msgpack.Packer, bi: BuilderInfo) msgpack.PackError!void {
+    try p.packMapHeader(2);
+    try p.packStr("b");
+    var addr_buf: [42]u8 = undefined;
+    const addr_str = addressToHexLower(bi.address, &addr_buf);
+    try p.packStr(addr_str);
+    try p.packStr("f");
+    try p.packUint(@intCast(bi.fee_tenths_bps));
+}
+
+fn addressToHexLower(addr: [20]u8, buf: *[42]u8) []const u8 {
+    buf[0] = '0';
+    buf[1] = 'x';
+    const hex = "0123456789abcdef";
+    for (addr, 0..) |b, i| {
+        buf[2 + i * 2] = hex[b >> 4];
+        buf[2 + i * 2 + 1] = hex[b & 0x0f];
+    }
+    return buf[0..42];
 }
 
 /// Pack a Cancel to msgpack.
@@ -298,9 +336,10 @@ pub const ActionTag = enum {
 };
 
 /// Pack an Action::Order to msgpack (with serde tag = "type").
-/// Output: {"type": "order", "orders": [...], "grouping": "na"}
+/// Output: {"type": "order", "orders": [...], "grouping": "na", "builder"?: {...}}
 pub fn packActionOrder(p: *msgpack.Packer, batch: BatchOrder) msgpack.PackError!void {
-    try p.packMapHeader(3); // type + orders + grouping
+    const map_size: u32 = if (batch.builder != null) 4 else 3;
+    try p.packMapHeader(map_size);
 
     // type: "order"
     try p.packStr("type");
@@ -316,6 +355,11 @@ pub fn packActionOrder(p: *msgpack.Packer, batch: BatchOrder) msgpack.PackError!
     // grouping: enum string
     try p.packStr("grouping");
     try p.packStr(@tagName(batch.grouping));
+
+    if (batch.builder) |bi| {
+        try p.packStr("builder");
+        try packBuilderInfo(p, bi);
+    }
 }
 
 /// Pack an Action::Cancel to msgpack (with serde tag).
@@ -1073,6 +1117,45 @@ test "packActionOrder: matches Rust Action::Order msgpack vector" {
     try packActionOrder(&p, batch);
 
     try std.testing.expectEqualSlices(u8, &expected, p.written());
+}
+
+test "packActionOrder: includes builder field when set" {
+    const order = OrderRequest{
+        .asset = 0,
+        .is_buy = true,
+        .limit_px = Decimal.fromString("50000") catch unreachable,
+        .sz = Decimal.fromString("0.1") catch unreachable,
+        .reduce_only = false,
+        .order_type = .{ .limit = .{ .tif = .Gtc } },
+        .cloid = ZERO_CLOID,
+    };
+
+    const builder_addr: [20]u8 = [_]u8{0x42} ** 20;
+    const batch = BatchOrder{
+        .orders = &[_]OrderRequest{order},
+        .grouping = .na,
+        .builder = .{ .address = builder_addr, .fee_tenths_bps = 100 },
+    };
+
+    var buf: [256]u8 = undefined;
+    var p = msgpack.Packer.init(&buf);
+    try packActionOrder(&p, batch);
+
+    const out = p.written();
+
+    // Header is fixmap with 4 entries (type, orders, grouping, builder).
+    try std.testing.expectEqual(@as(u8, 0x84), out[0]);
+
+    // "builder" key should appear in output.
+    const builder_key = "\xa7builder";
+    try std.testing.expect(std.mem.indexOf(u8, out, builder_key) != null);
+
+    // Address payload (lowercase hex with 0x prefix) should appear.
+    const expected_addr = "0x4242424242424242424242424242424242424242";
+    try std.testing.expect(std.mem.indexOf(u8, out, expected_addr) != null);
+
+    // Fee byte 100 = 0x64 (positive fixint, no marker).
+    try std.testing.expect(std.mem.indexOfScalar(u8, out[out.len - 3 ..], 0x64) != null);
 }
 
 test "packBatchOrder: matches Rust msgpack vector" {

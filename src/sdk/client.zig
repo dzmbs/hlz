@@ -1861,7 +1861,19 @@ fn writeActionJson(writer: anytype, action_data: anytype) !void {
             if (i > 0) try writer.writeAll(",");
             try writeOrderJson(writer, order);
         }
-        try writer.print("],\"grouping\":\"{s}\"}}", .{@tagName(action_data.grouping)});
+        try writer.print("],\"grouping\":\"{s}\"", .{@tagName(action_data.grouping)});
+        if (action_data.builder) |bi| {
+            var addr_buf: [42]u8 = undefined;
+            addr_buf[0] = '0';
+            addr_buf[1] = 'x';
+            const hex_chars = "0123456789abcdef";
+            for (bi.address, 0..) |b, i| {
+                addr_buf[2 + i * 2] = hex_chars[b >> 4];
+                addr_buf[2 + i * 2 + 1] = hex_chars[b & 0x0f];
+            }
+            try writer.print(",\"builder\":{{\"b\":\"{s}\",\"f\":{d}}}", .{ addr_buf[0..42], bi.fee_tenths_bps });
+        }
+        try writer.writeAll("}");
     } else if (T == types.BatchCancel) {
         try writer.writeAll("{\"type\":\"cancel\",\"cancels\":[");
         for (action_data.cancels, 0..) |c, i| {
