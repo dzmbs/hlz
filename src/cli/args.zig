@@ -139,6 +139,8 @@ pub const OrderArgs = struct {
     tp: ?[]const u8 = null,
     sl: ?[]const u8 = null,
     dry_run: bool = false,
+    builder: ?[]const u8 = null,
+    builder_fee: ?[]const u8 = null,
 };
 
 pub const CancelArgs = struct {
@@ -237,6 +239,8 @@ pub const BatchArgs = struct {
     orders: [16]?[]const u8 = .{null} ** 16,
     count: usize = 0,
     stdin: bool = false,
+    builder: ?[]const u8 = null,
+    builder_fee: ?[]const u8 = null,
 };
 
 pub const KeysArgs = struct {
@@ -602,6 +606,12 @@ fn parseOrder(args: []const []const u8) ?OrderArgs {
         } else if (std.mem.eql(u8, a, "--sl") and i + 1 < args.len) {
             i += 1;
             result.sl = args[i];
+        } else if (std.mem.eql(u8, a, "--builder") and i + 1 < args.len) {
+            i += 1;
+            result.builder = args[i];
+        } else if (std.mem.eql(u8, a, "--builder-fee") and i + 1 < args.len) {
+            i += 1;
+            result.builder_fee = args[i];
         } else {
             // Might be price without @
             result.price = a;
@@ -879,9 +889,17 @@ fn parseTwap(args: []const []const u8) ?TwapArgs {
 // batch "buy BTC 0.1 @98000" "sell ETH 1.0 @3400"
 fn parseBatch(args: []const []const u8) BatchArgs {
     var result = BatchArgs{};
-    for (args) |a| {
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const a = args[i];
         if (std.mem.eql(u8, a, "--stdin")) {
             result.stdin = true;
+        } else if (std.mem.eql(u8, a, "--builder") and i + 1 < args.len) {
+            i += 1;
+            result.builder = args[i];
+        } else if (std.mem.eql(u8, a, "--builder-fee") and i + 1 < args.len) {
+            i += 1;
+            result.builder_fee = args[i];
         } else if (result.count < 16) {
             result.orders[result.count] = a;
             result.count += 1;

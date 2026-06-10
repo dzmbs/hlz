@@ -599,11 +599,13 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  Limit orders use @PX or a bare trailing price. Omit price for market-style execution.
             \\  Flags: --reduce-only --tif <gtc|ioc|alo> --tp <PX> --sl <PX>
             \\  Also supports --trigger-above, --trigger-below, and --dry-run.
+            \\  Route via builder: --builder <ADDR> --builder-fee <PCT|TENTHS_BPS>.
             \\  Requires a signing key via --key-name/HL_PASSWORD, --key, or HL_KEY.
             \\
         ,
             \\  hlz buy BTC 0.1 @95000
             \\  hlz long ETH 1 --slippage 0.5 --dry-run
+            \\  hlz buy BTC 0.1 @95000 --builder 0xabc... --builder-fee 0.001%
             \\
         ),
         .sell => try printCommandDoc(w, "sell", "Place a sell order.",
@@ -614,6 +616,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\  Limit orders use @PX or a bare trailing price. Omit price for market-style execution.
             \\  Flags: --reduce-only --tif <gtc|ioc|alo> --tp <PX> --sl <PX>
             \\  Also supports --trigger-above, --trigger-below, and --dry-run.
+            \\  Route via builder: --builder <ADDR> --builder-fee <PCT|TENTHS_BPS>.
             \\  Requires a signing key via --key-name/HL_PASSWORD, --key, or HL_KEY.
             \\
         ,
@@ -798,6 +801,7 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
             \\
         , null,
             \\  Batch accepts up to 16 orders from argv or stdin.
+            \\  Route via builder: --builder <ADDR> --builder-fee <PCT|TENTHS_BPS>.
             \\  Requires a signing key via --key-name/HL_PASSWORD, --key, or HL_KEY.
             \\
         ,
