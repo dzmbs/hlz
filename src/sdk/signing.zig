@@ -236,6 +236,21 @@ pub fn signNoop(
     return signRmpAction(s, p.written(), nonce, chain, vault_address, expires_after);
 }
 
+/// Sign an agentSendAsset action (RMP path, agent wallet signs).
+pub fn signAgentSendAsset(
+    s: Signer,
+    asa: types.AgentSendAsset,
+    nonce: u64,
+    chain: Chain,
+    vault_address: ?Address,
+    expires_after: ?u64,
+) SignError!Signature {
+    var buf: [512]u8 = undefined;
+    var p = msgpack.Packer.init(&buf);
+    try types.packActionAgentSendAsset(&p, asa);
+    return signRmpAction(s, p.written(), nonce, chain, vault_address, expires_after);
+}
+
 
 /// Sign a UsdSend action (typed data path).
 pub fn signUsdSend(

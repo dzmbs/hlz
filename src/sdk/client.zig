@@ -409,6 +409,33 @@ pub const Client = struct {
         return self.exchangeRequestDyn(body);
     }
 
+    /// Agent-signed self-transfer across DEXes/spot/subaccounts.
+    /// Destination must equal the source address — exchange-side check.
+    /// Signed via L1-action path (msgpack), not EIP-712.
+    pub fn agentSendAsset(
+        self: *Client,
+        s: Signer,
+        asa: types.AgentSendAsset,
+    ) !ExchangeResult {
+        const sig = try signing.signAgentSendAsset(s, asa, asa.nonce, self.chain, null, null);
+        const dest_hex = addressToHex(asa.destination);
+        var body_buf: [2048]u8 = undefined;
+        const body = std.fmt.bufPrint(&body_buf,
+            \\{{"action":{{"type":"agentSendAsset","destination":"{s}","sourceDex":"{s}","destinationDex":"{s}","token":"{s}","amount":"{s}","fromSubAccount":"{s}","nonce":{d}}},"nonce":{d},"signature":{s},"vaultAddress":null,"expiresAfter":null}}
+        , .{
+            &dest_hex,
+            asa.source_dex,
+            asa.destination_dex,
+            asa.token,
+            asa.amount,
+            asa.from_sub_account,
+            asa.nonce,
+            asa.nonce,
+            sigJsonSlice(&sigJsonStr(sig)),
+        }) catch return error.BufferOverflow;
+        return self.exchangeRequestDyn(body);
+    }
+
     /// Approve an agent wallet.
     pub fn approveAgent(
         self: *Client,

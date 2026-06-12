@@ -134,6 +134,18 @@ pub const BatchModify = struct {
     modifies: []const Modify,
 };
 
+/// Agent-signed self-transfer across DEXes/spot/subaccounts.
+/// Signed via L1-action (msgpack) — destination must equal source.
+pub const AgentSendAsset = struct {
+    destination: [20]u8,
+    source_dex: []const u8,
+    destination_dex: []const u8,
+    token: []const u8,
+    amount: []const u8, // decimal string
+    from_sub_account: []const u8, // empty string for main account
+    nonce: u64,
+};
+
 // These are NOT msgpack-serialized — they go through EIP-712 typed data signing.
 // But they ARE JSON-serialized for the exchange endpoint.
 
@@ -333,6 +345,7 @@ pub const ActionTag = enum {
     CValidatorAction,
     agentEnableDexAbstraction,
     agentSetAbstraction,
+    agentSendAsset,
 };
 
 /// Pack an Action::Order to msgpack (with serde tag = "type").
@@ -487,6 +500,29 @@ pub fn packActionNoop(p: *msgpack.Packer) msgpack.PackError!void {
     try p.packMapHeader(1);
     try p.packStr("type");
     try p.packStr(@tagName(ActionTag.noop));
+}
+
+/// Pack an Action::AgentSendAsset to msgpack (with serde tag).
+pub fn packActionAgentSendAsset(p: *msgpack.Packer, asa: AgentSendAsset) msgpack.PackError!void {
+    try p.packMapHeader(8); // type + 7 fields
+    try p.packStr("type");
+    try p.packStr(@tagName(ActionTag.agentSendAsset));
+    try p.packStr("destination");
+    var addr_buf: [42]u8 = undefined;
+    const addr_str = addressToHexLower(asa.destination, &addr_buf);
+    try p.packStr(addr_str);
+    try p.packStr("sourceDex");
+    try p.packStr(asa.source_dex);
+    try p.packStr("destinationDex");
+    try p.packStr(asa.destination_dex);
+    try p.packStr("token");
+    try p.packStr(asa.token);
+    try p.packStr("amount");
+    try p.packStr(asa.amount);
+    try p.packStr("fromSubAccount");
+    try p.packStr(asa.from_sub_account);
+    try p.packStr("nonce");
+    try p.packUint(asa.nonce);
 }
 
 // ── Account & Transfer Actions ────────────────────────────────
@@ -1117,6 +1153,29 @@ test "packActionOrder: matches Rust Action::Order msgpack vector" {
     try packActionOrder(&p, batch);
 
     try std.testing.expectEqualSlices(u8, &expected, p.written());
+}
+
+test "packActionAgentSendAsset: structure" {
+    const asa = AgentSendAsset{
+        .destination = [_]u8{0x42} ** 20,
+        .source_dex = "",
+        .destination_dex = "",
+        .token = "USDC",
+        .amount = "100.0",
+        .from_sub_account = "",
+        .nonce = 1234567890,
+    };
+
+    var buf: [512]u8 = undefined;
+    var p = msgpack.Packer.init(&buf);
+    try packActionAgentSendAsset(&p, asa);
+
+    const out = p.written();
+    // fixmap with 8 entries
+    try std.testing.expectEqual(@as(u8, 0x88), out[0]);
+    try std.testing.expect(std.mem.indexOf(u8, out, "agentSendAsset") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "0x4242424242424242424242424242424242424242") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "fromSubAccount") != null);
 }
 
 test "packActionOrder: includes builder field when set" {
