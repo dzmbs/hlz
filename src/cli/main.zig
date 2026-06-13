@@ -657,11 +657,13 @@ fn printCommandHelp(w: *output_mod.Writer, topic: args_mod.HelpTopic) !void {
         , null,
             \\  TOKEN defaults to USDC. If DEST is omitted, hlz performs a self-transfer.
             \\  Use --from and --to for perp/spot moves or DEX destinations.
+            \\  --agent uses agentSendAsset (API wallet signing); destination must equal the signer.
             \\  Requires a signing key via --key-name/HL_PASSWORD, --key, or HL_KEY.
             \\
         ,
             \\  hlz send 100 USDC 0xabc...
             \\  hlz send 100 USDC --to spot
+            \\  hlz send 100 USDC --from perp --to spot --agent
             \\
         ),
         .stream => try printCommandDoc(w, "stream", "Subscribe to a live WebSocket feed.",

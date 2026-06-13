@@ -1926,7 +1926,22 @@ pub fn sendAsset(allocator: std.mem.Allocator, w: *Writer, config: Config, a: ar
         const dest_dex = if (std.mem.eql(u8, a.to, "perp")) "" else if (std.mem.eql(u8, a.to, "spot")) "spot" else a.to;
         const sub = a.subaccount orelse "";
 
-        var result = try client.sendAsset(auth.signer, dest, source_dex, dest_dex, a.token, a.amount, sub, now);
+        var result = if (a.agent) blk: {
+            const dest_signer = auth.address();
+            if (!std.ascii.eqlIgnoreCase(dest_str, dest_signer)) {
+                return failFmt(w, "--agent requires destination to equal signer ({s})", .{dest_signer});
+            }
+            const asa = types.AgentSendAsset{
+                .destination = dest,
+                .source_dex = source_dex,
+                .destination_dex = dest_dex,
+                .token = a.token,
+                .amount = a.amount,
+                .from_sub_account = sub,
+                .nonce = now,
+            };
+            break :blk try client.agentSendAsset(auth.signer, asa);
+        } else try client.sendAsset(auth.signer, dest, source_dex, dest_dex, a.token, a.amount, sub, now);
         defer result.deinit();
 
         if (w.format == .json) {
@@ -1939,7 +1954,10 @@ pub fn sendAsset(allocator: std.mem.Allocator, w: *Writer, config: Config, a: ar
             try w.success("Sent ");
             const from_label = if (source_dex.len == 0) "perp" else source_dex;
             const to_label = if (dest_dex.len == 0) "perp" else dest_dex;
-            try w.print("{s} {s} ({s} \xe2\x86\x92 {s}) \xe2\x86\x92 {s}\n", .{ a.amount, a.token, from_label, to_label, dest_str });
+            try w.print("{s} {s} ({s} \xe2\x86\x92 {s}) \xe2\x86\x92 {s}{s}\n", .{
+                a.amount, a.token, from_label, to_label, dest_str,
+                if (a.agent) " (agent)" else "",
+            });
         } else {
             try w.fail("send failed");
             try w.print("{s}\n", .{result.body});
