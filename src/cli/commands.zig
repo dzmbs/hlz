@@ -460,10 +460,11 @@ pub fn mids(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_mo
                 const name_src = if (pair.name.len > 0 and pair.name[0] != '@')
                     pair.name
                 else blk: {
-                    // Build "BASE/QUOTE" from token indices
-                    if (pair.tokens[0] >= tokens.len or pair.tokens[1] >= tokens.len) break :blk pair.name;
-                    const base = tokens[pair.tokens[0]].name;
-                    const quote = tokens[pair.tokens[1]].name;
+                    // Build "BASE/QUOTE" from token indices (lookup by SpotToken.index)
+                    const base_t = response.findSpotToken(tokens, pair.tokens[0]) orelse break :blk pair.name;
+                    const quote_t = response.findSpotToken(tokens, pair.tokens[1]) orelse break :blk pair.name;
+                    const base = base_t.name;
+                    const quote = quote_t.name;
                     const total_len = base.len + 1 + quote.len;
                     if (total_len >= 47) break :blk pair.name;
                     @memcpy(spot_names[i][0..base.len], base);
@@ -2344,9 +2345,10 @@ fn resolveSpotIndex(allocator: std.mem.Allocator, config: Config, pair: []const 
     var sm = client.getSpotMeta() catch return null;
     defer sm.deinit();
     for (sm.value.universe) |u| {
-        if (u.tokens[0] >= sm.value.tokens.len or u.tokens[1] >= sm.value.tokens.len) continue;
-        if (std.ascii.eqlIgnoreCase(sm.value.tokens[u.tokens[0]].name, base) and
-            std.ascii.eqlIgnoreCase(sm.value.tokens[u.tokens[1]].name, quote))
+        const base_t = response.findSpotToken(sm.value.tokens, u.tokens[0]) orelse continue;
+        const quote_t = response.findSpotToken(sm.value.tokens, u.tokens[1]) orelse continue;
+        if (std.ascii.eqlIgnoreCase(base_t.name, base) and
+            std.ascii.eqlIgnoreCase(quote_t.name, quote))
         {
             return std.fmt.bufPrint(buf, "@{d}", .{u.index}) catch return null;
         }
@@ -2887,13 +2889,14 @@ fn resolveAsset(client: *Client, coin: []const u8) !ResolvedAsset {
         defer typed.deinit();
         const tokens = typed.value.tokens;
         for (typed.value.universe) |pair| {
-            if (pair.tokens[0] >= tokens.len or pair.tokens[1] >= tokens.len) continue;
-            if (std.ascii.eqlIgnoreCase(tokens[pair.tokens[0]].name, base) and
-                std.ascii.eqlIgnoreCase(tokens[pair.tokens[1]].name, quote))
+            const base_t = response.findSpotToken(tokens, pair.tokens[0]) orelse continue;
+            const quote_t = response.findSpotToken(tokens, pair.tokens[1]) orelse continue;
+            if (std.ascii.eqlIgnoreCase(base_t.name, base) and
+                std.ascii.eqlIgnoreCase(quote_t.name, quote))
             {
                 return .{
                     .index = @intCast(10000 + pair.index),
-                    .sz_decimals = @intCast(tokens[pair.tokens[0]].szDecimals),
+                    .sz_decimals = @intCast(base_t.szDecimals),
                 };
             }
         }
@@ -3440,9 +3443,10 @@ pub fn price(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_m
                     }
                 }
                 for (sm.value.universe) |pair| {
-                    if (pair.tokens[0] >= sm.value.tokens.len or pair.tokens[1] >= sm.value.tokens.len) continue;
-                    const pair_base = sm.value.tokens[pair.tokens[0]].name;
-                    const pair_quote = sm.value.tokens[pair.tokens[1]].name;
+                    const base_t = response.findSpotToken(sm.value.tokens, pair.tokens[0]) orelse continue;
+                    const quote_t = response.findSpotToken(sm.value.tokens, pair.tokens[1]) orelse continue;
+                    const pair_base = base_t.name;
+                    const pair_quote = quote_t.name;
                     if (!std.ascii.eqlIgnoreCase(pair_base, base)) continue;
                     if (quote_filter) |qf| {
                         if (!std.ascii.eqlIgnoreCase(pair_quote, qf)) continue;

@@ -251,11 +251,12 @@ fn resolveAsset(client: *Client, coin: []const u8) !ResolvedAsset {
         defer typed.deinit();
         const tokens = typed.value.tokens;
         for (typed.value.universe) |pair| {
-            if (pair.tokens[0] >= tokens.len or pair.tokens[1] >= tokens.len) continue;
+            const base_t = response.findSpotToken(tokens, pair.tokens[0]) orelse continue;
+            _ = response.findSpotToken(tokens, pair.tokens[1]) orelse continue;
             if (std.ascii.eqlIgnoreCase(pair.name, coin)) {
                 return .{
                     .index = @intCast(10000 + pair.index),
-                    .sz_decimals = @intCast(tokens[pair.tokens[0]].szDecimals),
+                    .sz_decimals = @intCast(base_t.szDecimals),
                     .max_leverage = 1,
                 };
             }
@@ -2879,11 +2880,12 @@ fn loadPickerData(p: *PickerState, client: *Client) void {
             const tokens = typed.value.tokens;
             for (typed.value.universe) |pair| {
                 if (p.count >= PICKER_MAX) break;
-                if (pair.tokens[0] >= tokens.len or pair.tokens[1] >= tokens.len) continue;
+                const base_t = response.findSpotToken(tokens, pair.tokens[0]) orelse continue;
+                const quote_t = response.findSpotToken(tokens, pair.tokens[1]) orelse continue;
                 var e = &p.entries[p.count];
                 e.* = .{};
-                const base = tokens[pair.tokens[0]].name;
-                const quote = tokens[pair.tokens[1]].name;
+                const base = base_t.name;
+                const quote = quote_t.name;
                 const dn = std.fmt.bufPrint(&e.display, "{s}/{s}", .{ base, quote }) catch "";
                 e.display_len = @intCast(dn.len);
                 @memcpy(e.coin[0..dn.len], e.display[0..dn.len]);

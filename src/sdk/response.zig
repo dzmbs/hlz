@@ -337,6 +337,17 @@ pub const SpotMeta = struct {
     universe: []SpotPair = &.{},
 };
 
+/// Look up a spot token by its `index` field — NOT by array position.
+/// HyperCore reuses token indices across delistings, so the `tokens`
+/// array can have gaps where `tokens[i].index != i`. Universe markets
+/// reference the token's real `index`, so callers must match on it.
+pub fn findSpotToken(tokens: []const SpotToken, idx: u32) ?*const SpotToken {
+    for (tokens) |*t| {
+        if (t.index == idx) return t;
+    }
+    return null;
+}
+
 pub const SpotPair = struct {
     name: []const u8 = "",
     tokens: [2]u32 = .{ 0, 0 },
