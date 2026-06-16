@@ -21,6 +21,10 @@ pub const Subscription = union(enum) {
     activeAssetCtx: struct { coin: []const u8 },
     activeAssetData: struct { user: []const u8, coin: []const u8 },
     webData2: struct { user: []const u8, dex: ?[]const u8 = null },
+    clearinghouseState: struct { user: []const u8, dex: ?[]const u8 = null },
+    allDexsClearinghouseState: struct { user: []const u8 },
+    openOrders: struct { user: []const u8, dex: ?[]const u8 = null },
+    spotState: struct { user: []const u8 },
 
     fn formatMsg(self: Subscription, buf: []u8, method: []const u8) ![]const u8 {
         return switch (self) {
@@ -73,6 +77,28 @@ pub const Subscription = union(enum) {
                 std.fmt.bufPrint(buf,
                     \\{{"method":"{s}","subscription":{{"type":"webData2","user":"{s}"}}}}
                 , .{ method, s.user }),
+            .clearinghouseState => |s| if (s.dex) |d|
+                std.fmt.bufPrint(buf,
+                    \\{{"method":"{s}","subscription":{{"type":"clearinghouseState","user":"{s}","dex":"{s}"}}}}
+                , .{ method, s.user, d })
+            else
+                std.fmt.bufPrint(buf,
+                    \\{{"method":"{s}","subscription":{{"type":"clearinghouseState","user":"{s}"}}}}
+                , .{ method, s.user }),
+            .allDexsClearinghouseState => |s| std.fmt.bufPrint(buf,
+                \\{{"method":"{s}","subscription":{{"type":"allDexsClearinghouseState","user":"{s}"}}}}
+            , .{ method, s.user }),
+            .openOrders => |s| if (s.dex) |d|
+                std.fmt.bufPrint(buf,
+                    \\{{"method":"{s}","subscription":{{"type":"openOrders","user":"{s}","dex":"{s}"}}}}
+                , .{ method, s.user, d })
+            else
+                std.fmt.bufPrint(buf,
+                    \\{{"method":"{s}","subscription":{{"type":"openOrders","user":"{s}"}}}}
+                , .{ method, s.user }),
+            .spotState => |s| std.fmt.bufPrint(buf,
+                \\{{"method":"{s}","subscription":{{"type":"spotState","user":"{s}"}}}}
+            , .{ method, s.user }),
         };
     }
 
@@ -352,6 +378,38 @@ test "Subscription.toJson: candle" {
     const json = try (Subscription{ .candle = .{ .coin = "ETH", .interval = "15m" } }).toJson(&buf);
     try std.testing.expectEqualStrings(
         \\{"method":"subscribe","subscription":{"type":"candle","coin":"ETH","interval":"15m"}}
+    , json);
+}
+
+test "Subscription.toJson: clearinghouseState with dex" {
+    var buf: [256]u8 = undefined;
+    const json = try (Subscription{ .clearinghouseState = .{ .user = "0xabc", .dex = "xyz" } }).toJson(&buf);
+    try std.testing.expectEqualStrings(
+        \\{"method":"subscribe","subscription":{"type":"clearinghouseState","user":"0xabc","dex":"xyz"}}
+    , json);
+}
+
+test "Subscription.toJson: allDexsClearinghouseState" {
+    var buf: [256]u8 = undefined;
+    const json = try (Subscription{ .allDexsClearinghouseState = .{ .user = "0xabc" } }).toJson(&buf);
+    try std.testing.expectEqualStrings(
+        \\{"method":"subscribe","subscription":{"type":"allDexsClearinghouseState","user":"0xabc"}}
+    , json);
+}
+
+test "Subscription.toJson: openOrders without dex" {
+    var buf: [256]u8 = undefined;
+    const json = try (Subscription{ .openOrders = .{ .user = "0xabc" } }).toJson(&buf);
+    try std.testing.expectEqualStrings(
+        \\{"method":"subscribe","subscription":{"type":"openOrders","user":"0xabc"}}
+    , json);
+}
+
+test "Subscription.toJson: spotState" {
+    var buf: [256]u8 = undefined;
+    const json = try (Subscription{ .spotState = .{ .user = "0xabc" } }).toJson(&buf);
+    try std.testing.expectEqualStrings(
+        \\{"method":"subscribe","subscription":{"type":"spotState","user":"0xabc"}}
     , json);
 }
 
