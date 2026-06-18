@@ -9,7 +9,7 @@ pub const TESTNET_WS_URL = "wss://api.hyperliquid-testnet.xyz/ws";
 
 pub const Subscription = union(enum) {
     allMids: struct { dex: ?[]const u8 = null },
-    l2Book: struct { coin: []const u8 },
+    l2Book: struct { coin: []const u8, fast: ?bool = null },
     trades: struct { coin: []const u8 },
     candle: struct { coin: []const u8, interval: []const u8 },
     bbo: struct { coin: []const u8 },
@@ -18,7 +18,9 @@ pub const Subscription = union(enum) {
     userEvents: struct { user: []const u8 },
     userTwapSliceFills: struct { user: []const u8 },
     userTwapHistory: struct { user: []const u8 },
-    activeAssetCtx: struct { coin: []const u8 },
+    activeAssetCtx: struct { coin: []const u8, fast: ?bool = null },
+    /// Low-latency mark / mid push for all assets.
+    fastAssetCtxs: struct {},
     activeAssetData: struct { user: []const u8, coin: []const u8 },
     webData2: struct { user: []const u8, dex: ?[]const u8 = null },
     clearinghouseState: struct { user: []const u8, dex: ?[]const u8 = null },
@@ -36,9 +38,14 @@ pub const Subscription = union(enum) {
                 std.fmt.bufPrint(buf,
                     \\{{"method":"{s}","subscription":{{"type":"allMids"}}}}
                 , .{method}),
-            .l2Book => |s| std.fmt.bufPrint(buf,
-                \\{{"method":"{s}","subscription":{{"type":"l2Book","coin":"{s}"}}}}
-            , .{ method, s.coin }),
+            .l2Book => |s| if (s.fast orelse false)
+                std.fmt.bufPrint(buf,
+                    \\{{"method":"{s}","subscription":{{"type":"l2Book","coin":"{s}","fast":true}}}}
+                , .{ method, s.coin })
+            else
+                std.fmt.bufPrint(buf,
+                    \\{{"method":"{s}","subscription":{{"type":"l2Book","coin":"{s}"}}}}
+                , .{ method, s.coin }),
             .trades => |s| std.fmt.bufPrint(buf,
                 \\{{"method":"{s}","subscription":{{"type":"trades","coin":"{s}"}}}}
             , .{ method, s.coin }),
@@ -63,9 +70,17 @@ pub const Subscription = union(enum) {
             .userTwapHistory => |s| std.fmt.bufPrint(buf,
                 \\{{"method":"{s}","subscription":{{"type":"userTwapHistory","user":"{s}"}}}}
             , .{ method, s.user }),
-            .activeAssetCtx => |s| std.fmt.bufPrint(buf,
-                \\{{"method":"{s}","subscription":{{"type":"activeAssetCtx","coin":"{s}"}}}}
-            , .{ method, s.coin }),
+            .activeAssetCtx => |s| if (s.fast orelse false)
+                std.fmt.bufPrint(buf,
+                    \\{{"method":"{s}","subscription":{{"type":"activeAssetCtx","coin":"{s}","fast":true}}}}
+                , .{ method, s.coin })
+            else
+                std.fmt.bufPrint(buf,
+                    \\{{"method":"{s}","subscription":{{"type":"activeAssetCtx","coin":"{s}"}}}}
+                , .{ method, s.coin }),
+            .fastAssetCtxs => std.fmt.bufPrint(buf,
+                \\{{"method":"{s}","subscription":{{"type":"fastAssetCtxs"}}}}
+            , .{method}),
             .activeAssetData => |s| std.fmt.bufPrint(buf,
                 \\{{"method":"{s}","subscription":{{"type":"activeAssetData","user":"{s}","coin":"{s}"}}}}
             , .{ method, s.user, s.coin }),
@@ -378,6 +393,30 @@ test "Subscription.toJson: candle" {
     const json = try (Subscription{ .candle = .{ .coin = "ETH", .interval = "15m" } }).toJson(&buf);
     try std.testing.expectEqualStrings(
         \\{"method":"subscribe","subscription":{"type":"candle","coin":"ETH","interval":"15m"}}
+    , json);
+}
+
+test "Subscription.toJson: l2Book default" {
+    var buf: [256]u8 = undefined;
+    const json = try (Subscription{ .l2Book = .{ .coin = "BTC" } }).toJson(&buf);
+    try std.testing.expectEqualStrings(
+        \\{"method":"subscribe","subscription":{"type":"l2Book","coin":"BTC"}}
+    , json);
+}
+
+test "Subscription.toJson: l2Book fast" {
+    var buf: [256]u8 = undefined;
+    const json = try (Subscription{ .l2Book = .{ .coin = "BTC", .fast = true } }).toJson(&buf);
+    try std.testing.expectEqualStrings(
+        \\{"method":"subscribe","subscription":{"type":"l2Book","coin":"BTC","fast":true}}
+    , json);
+}
+
+test "Subscription.toJson: fastAssetCtxs" {
+    var buf: [256]u8 = undefined;
+    const json = try (Subscription{ .fastAssetCtxs = .{} }).toJson(&buf);
+    try std.testing.expectEqualStrings(
+        \\{"method":"subscribe","subscription":{"type":"fastAssetCtxs"}}
     , json);
 }
 
