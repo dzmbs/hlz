@@ -734,12 +734,26 @@ const WsWorker = struct {
         runInner(shared, allocator, chain, user_addr) catch {};
     }
 
+    /// Reconnect backoff matches upstream hypersdk (5ada01f): 500ms × 2^attempts
+    /// capped at 5s, with attempts shifted at most 13 times so 1<<attempts cannot
+    /// overflow the u6 shift on u64. Reset to 0 on a successful connect.
+    const INITIAL_RECONNECT_NS: u64 = 500_000_000;
+    const MAX_RECONNECT_NS: u64 = 5_000_000_000;
+    const MAX_RECONNECT_SHIFT: u6 = 13;
+
+    fn backoffNs(attempts: u32) u64 {
+        const shift: u6 = @intCast(@min(attempts, @as(u32, MAX_RECONNECT_SHIFT)));
+        const ns = INITIAL_RECONNECT_NS *% (@as(u64, 1) << shift);
+        return @min(ns, MAX_RECONNECT_NS);
+    }
+
     fn runInner(shared: *Shared, allocator: std.mem.Allocator, chain: signing.Chain, user_addr: ?[]const u8) !void {
         var arena_state = std.heap.ArenaAllocator.init(allocator);
         defer arena_state.deinit();
         var prev_coin_gen: u64 = 0;
         var prev_iv: [4]u8 = .{ 0, 0, 0, 0 };
         var prev_iv_len: u8 = 0;
+        var reconnect_attempts: u32 = 0;
 
         while (shared.running.load(.acquire)) {
             var coin_buf: [16]u8 = undefined;
@@ -778,11 +792,13 @@ const WsWorker = struct {
 
             // Connect WS (blocking reads, broken by shutdown())
             const conn = ws_types.Connection.connect(allocator, chain) catch {
-                sleepNs(1_000_000_000);
+                sleepNs(backoffNs(reconnect_attempts));
+                reconnect_attempts +|= 1;
                 continue;
             };
             defer conn.close();
             shared.ws_fd.store(conn.socket_fd, .release);
+            reconnect_attempts = 0;
 
             conn.subscribe(.{ .l2Book = .{ .coin = coin } }) catch {};
             conn.subscribe(.{ .trades = .{ .coin = coin } }) catch {};
