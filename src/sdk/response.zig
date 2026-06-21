@@ -392,6 +392,55 @@ pub const OutcomeMeta = struct {
     questions: []OutcomeQuestion = &.{},
 };
 
+/// Decoded form of a recurring outcome description like
+/// `class:priceBinary|underlying:BTC|expiry:20260317-0300|targetPrice:74212|period:1d`.
+///
+/// Non-recurring outcomes use free-text descriptions and will return null from
+/// parseRecurringEvent. Slices point into the source description string and are
+/// only valid while it stays alive.
+pub const RecurringEvent = struct {
+    class: []const u8,
+    underlying: []const u8,
+    expiry: []const u8,
+    target_price: Decimal,
+    period: []const u8,
+};
+
+pub fn parseRecurringEvent(description: []const u8) ?RecurringEvent {
+    var class: ?[]const u8 = null;
+    var underlying: ?[]const u8 = null;
+    var expiry: ?[]const u8 = null;
+    var target_price_str: ?[]const u8 = null;
+    var period: ?[]const u8 = null;
+
+    var parts = std.mem.splitScalar(u8, description, '|');
+    while (parts.next()) |part| {
+        const colon = std.mem.indexOfScalar(u8, part, ':') orelse return null;
+        const key = part[0..colon];
+        const value = part[colon + 1 ..];
+        if (std.mem.eql(u8, key, "class")) {
+            class = value;
+        } else if (std.mem.eql(u8, key, "underlying")) {
+            underlying = value;
+        } else if (std.mem.eql(u8, key, "expiry")) {
+            expiry = value;
+        } else if (std.mem.eql(u8, key, "targetPrice")) {
+            target_price_str = value;
+        } else if (std.mem.eql(u8, key, "period")) {
+            period = value;
+        }
+    }
+
+    const target_price = Decimal.fromString(target_price_str orelse return null) catch return null;
+    return .{
+        .class = class orelse return null,
+        .underlying = underlying orelse return null,
+        .expiry = expiry orelse return null,
+        .target_price = target_price,
+        .period = period orelse return null,
+    };
+}
+
 pub const TokenDetails = struct {
     name: []const u8 = "",
     szDecimals: u32 = 0,
@@ -634,6 +683,26 @@ test "Fill auto-parse" {
     try std.testing.expectEqualStrings("BTC", parsed.value.coin);
     try std.testing.expectEqual(@as(u64, 12345), parsed.value.oid);
     try std.testing.expectEqual(true, parsed.value.crossed);
+}
+
+test "parseRecurringEvent: full description" {
+    const desc = "class:priceBinary|underlying:BTC|expiry:20260317-0300|targetPrice:74212|period:1d";
+    const ev = parseRecurringEvent(desc) orelse return error.TestFailed;
+    try std.testing.expectEqualStrings("priceBinary", ev.class);
+    try std.testing.expectEqualStrings("BTC", ev.underlying);
+    try std.testing.expectEqualStrings("20260317-0300", ev.expiry);
+    try std.testing.expectEqualStrings("1d", ev.period);
+    var buf: [16]u8 = undefined;
+    try std.testing.expectEqualStrings("74212", try ev.target_price.toString(&buf));
+}
+
+test "parseRecurringEvent: free-text returns null" {
+    try std.testing.expect(parseRecurringEvent("What will Hypurr eat?") == null);
+}
+
+test "parseRecurringEvent: missing key returns null" {
+    const desc = "class:priceBinary|underlying:BTC|expiry:20260317-0300|targetPrice:74212";
+    try std.testing.expect(parseRecurringEvent(desc) == null);
 }
 
 test "parseOneOrderStatus waitingForTrigger and waitingForFill" {
