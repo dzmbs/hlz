@@ -2934,17 +2934,11 @@ fn loadPickerData(p: *PickerState, client: *Client) void {
 }
 
 fn buildOutcomeDisplay(buf: *[48]u8, o: response.OutcomeInfo, side: response.OutcomeSideSpec) usize {
-    // Parse structured description: "class:priceBinary|underlying:BTC|expiry:20260317-0300|targetPrice:74212|period:1d"
-    if (std.mem.startsWith(u8, o.description, "class:priceBinary")) {
-        var underlying: []const u8 = "?";
-        var target: []const u8 = "?";
-        var iter = std.mem.splitScalar(u8, o.description, '|');
-        while (iter.next()) |part| {
-            if (std.mem.startsWith(u8, part, "underlying:")) underlying = part["underlying:".len..];
-            if (std.mem.startsWith(u8, part, "targetPrice:")) target = part["targetPrice:".len..];
-        }
-        // "BTC > 74212 (Yes)"
-        const r = std.fmt.bufPrint(buf, "{s}>{s} ({s})", .{ underlying, target, side.name }) catch return 0;
+    if (response.parseRecurringEvent(o.description)) |ev| {
+        var px_buf: [24]u8 = undefined;
+        const px = ev.target_price.normalize().toString(&px_buf) catch "?";
+        // "BTC>74212 1d (Yes)"
+        const r = std.fmt.bufPrint(buf, "{s}>{s} {s} ({s})", .{ ev.underlying, px, ev.period, side.name }) catch return 0;
         return r.len;
     }
     // Fallback: "Question Name (Side)"
