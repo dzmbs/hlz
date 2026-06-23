@@ -10,7 +10,7 @@ const trade_mod = @import("trade");
 const runtime = @import("hlz").runtime;
 
 const Style = output_mod.Style;
-const VERSION = "0.6.0";
+const VERSION = "0.7.0";
 
 // Exit codes (documented in --help, stable contract)
 const EXIT_OK: u8 = 0;
