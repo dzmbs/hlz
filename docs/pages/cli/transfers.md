@@ -30,3 +30,17 @@ hlz send 100 USDC --to perp
 ```
 
 Transfers on Hyperliquid are **free and instant** — no gas fees.
+
+### Agent-Signed Transfers (`--agent`)
+
+Pass `--agent` to route the transfer through `agentSendAsset` — the L1-action
+variant signed by an API wallet rather than EIP-712. The destination MUST equal
+the signer's address, so this is limited to self-transfers across DEXes, the
+spot balance, or between sub-accounts of the same master account.
+
+```bash
+hlz send 100 USDC --from perp --to spot --agent
+```
+
+Useful when an agent wallet needs to move funds across balance contexts without
+the master account ever being online to typed-data sign.

@@ -137,6 +137,21 @@ const OutcomeQuestion = struct {
 };
 ```
 
+### `RecurringEvent` and `parseRecurringEvent`
+
+Recurring outcome descriptions ship as a pipe-delimited bag like
+`class:priceBinary|underlying:BTC|expiry:20260317-0300|targetPrice:74212|period:1d`.
+Decode them with `parseRecurringEvent(description)`:
+
+```zig
+const ev = response.parseRecurringEvent(outcome.description) orelse return;
+// ev.underlying == "BTC", ev.target_price == 74212, ev.period == "1d"
+```
+
+Free-text descriptions and payloads missing any required key return `null`.
+Field slices alias the source description string and are only valid while it
+stays alive.
+
 ## Asset Index Resolution
 
 The SDK resolves human-readable asset names to numeric indices at runtime:

@@ -120,6 +120,7 @@ defer result.deinit();
 | `sendUsdc` | Send USDC to address |
 | `spotSend` | Send spot tokens |
 | `sendAsset` | Send between contexts/dexes |
+| `agentSendAsset` | Agent-signed self-transfer between contexts/dexes/sub-accounts |
 | `withdraw` | Bridge withdrawal |
 | `usdClassTransfer` | Move USDC between spot ↔ perp |
 | `approveAgent` | Approve API wallet |

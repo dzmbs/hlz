@@ -122,7 +122,36 @@ sell ETH 1.0 @3500" | hlz batch --stdin
 | `--trigger-below <PX>` | Trigger order below price (stop-loss) |
 | `--slippage <PX>` | Max slippage for market orders |
 | `--tif gtc\|ioc\|alo` | Time-in-force (default: gtc) |
+| `--builder <ADDR>` | Builder address routing the order |
+| `--builder-fee <PCT\|TENTHS_BPS>` | Builder fee (`"0.001%"` or raw tenths-of-bps) |
 | `--dry-run`, `-n` | Preview without sending |
+
+## Builder Code
+
+Builder-routed orders carry a per-order fee paid to the builder address. The fee
+must be pre-approved via `hlz approve-builder <ADDR> <MAX_FEE_RATE>` once per
+builder, then attached to each subsequent order:
+
+```bash
+hlz approve-builder 0xBuilder... "0.001%"
+hlz buy BTC 0.1 @95000 --builder 0xBuilder... --builder-fee 0.001%
+```
+
+Fees pass through as `tenths-of-bps` (1 = 0.0001%) on the wire — the CLI
+accepts a percent string (`"0.001%"`) or a raw integer.
+
+## Trigger Order Statuses
+
+When the exchange accepts a trigger order without immediately filling it, the
+response status is one of:
+
+| Status | Meaning |
+|--------|---------|
+| `waiting for trigger` | Trigger order accepted; waiting for its trigger price |
+| `waiting to fill` | Order accepted; waiting to fill |
+| `resting` | Order on the book (immediate accept of a non-trigger limit) |
+| `filled` | Filled immediately (market or aggressive limit) |
+| `rejected: <msg>` | Rejected by the exchange |
 
 ## Time-in-Force
 
