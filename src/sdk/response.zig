@@ -337,10 +337,7 @@ pub const SpotMeta = struct {
     universe: []SpotPair = &.{},
 };
 
-/// Look up a spot token by its `index` field — NOT by array position.
-/// HyperCore reuses token indices across delistings, so the `tokens`
-/// array can have gaps where `tokens[i].index != i`. Universe markets
-/// reference the token's real `index`, so callers must match on it.
+/// Match by `.index` — `tokens` is sparse (delistings leave gaps), so position-based lookup misses.
 pub fn findSpotToken(tokens: []const SpotToken, idx: u32) ?*const SpotToken {
     for (tokens) |*t| {
         if (t.index == idx) return t;
@@ -392,12 +389,8 @@ pub const OutcomeMeta = struct {
     questions: []OutcomeQuestion = &.{},
 };
 
-/// Decoded form of a recurring outcome description like
-/// `class:priceBinary|underlying:BTC|expiry:20260317-0300|targetPrice:74212|period:1d`.
-///
-/// Non-recurring outcomes use free-text descriptions and will return null from
-/// parseRecurringEvent. Slices point into the source description string and are
-/// only valid while it stays alive.
+/// Decoded form of `class:...|underlying:...|expiry:...|targetPrice:...|period:...`.
+/// Slices alias the source description — keep it alive for as long as the event.
 pub const RecurringEvent = struct {
     class: []const u8,
     underlying: []const u8,

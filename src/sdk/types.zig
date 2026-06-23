@@ -62,12 +62,9 @@ pub const OrderRequest = struct {
     cloid: Cloid,
 };
 
-/// Builder fee attached to an order action.
-/// Serialized as `{"b": <address>, "f": <tenths_of_bps>}`.
+/// Serialized as `{"b": <address>, "f": <tenths_of_bps>}`. One tenth of a basis point = 0.0001%.
 pub const BuilderInfo = struct {
-    /// Builder address (20 bytes, packed as "0x..." string).
     address: [20]u8,
-    /// Builder fee in tenths of a basis point. 1 = 0.001%.
     fee_tenths_bps: u32,
 };
 
@@ -134,15 +131,14 @@ pub const BatchModify = struct {
     modifies: []const Modify,
 };
 
-/// Agent-signed self-transfer across DEXes/spot/subaccounts.
-/// Signed via L1-action (msgpack) — destination must equal source.
+/// Agent-signed self-transfer. Destination must equal source — enforced by the exchange.
 pub const AgentSendAsset = struct {
     destination: [20]u8,
     source_dex: []const u8,
     destination_dex: []const u8,
     token: []const u8,
-    amount: []const u8, // decimal string
-    from_sub_account: []const u8, // empty string for main account
+    amount: []const u8,
+    from_sub_account: []const u8,
     nonce: u64,
 };
 
@@ -265,7 +261,6 @@ pub fn packBatchOrder(p: *msgpack.Packer, batch: BatchOrder) msgpack.PackError!v
     try p.packStr("grouping");
     try p.packStr(@tagName(batch.grouping));
 
-    // builder: optional {b: address, f: fee}
     if (batch.builder) |bi| {
         try p.packStr("builder");
         try packBuilderInfo(p, bi);
@@ -1171,7 +1166,6 @@ test "packActionAgentSendAsset: structure" {
     try packActionAgentSendAsset(&p, asa);
 
     const out = p.written();
-    // fixmap with 8 entries
     try std.testing.expectEqual(@as(u8, 0x88), out[0]);
     try std.testing.expect(std.mem.indexOf(u8, out, "agentSendAsset") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "0x4242424242424242424242424242424242424242") != null);
@@ -1201,19 +1195,10 @@ test "packActionOrder: includes builder field when set" {
     try packActionOrder(&p, batch);
 
     const out = p.written();
-
-    // Header is fixmap with 4 entries (type, orders, grouping, builder).
     try std.testing.expectEqual(@as(u8, 0x84), out[0]);
-
-    // "builder" key should appear in output.
-    const builder_key = "\xa7builder";
-    try std.testing.expect(std.mem.indexOf(u8, out, builder_key) != null);
-
-    // Address payload (lowercase hex with 0x prefix) should appear.
-    const expected_addr = "0x4242424242424242424242424242424242424242";
-    try std.testing.expect(std.mem.indexOf(u8, out, expected_addr) != null);
-
-    // Fee byte 100 = 0x64 (positive fixint, no marker).
+    try std.testing.expect(std.mem.indexOf(u8, out, "\xa7builder") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "0x4242424242424242424242424242424242424242") != null);
+    // Fee 100 → 0x64 positive-fixint, no marker byte.
     try std.testing.expect(std.mem.indexOfScalar(u8, out[out.len - 3 ..], 0x64) != null);
 }
 

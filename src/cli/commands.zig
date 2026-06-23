@@ -460,7 +460,6 @@ pub fn mids(allocator: std.mem.Allocator, w: *Writer, config: Config, a: args_mo
                 const name_src = if (pair.name.len > 0 and pair.name[0] != '@')
                     pair.name
                 else blk: {
-                    // Build "BASE/QUOTE" from token indices (lookup by SpotToken.index)
                     const base_t = response.findSpotToken(tokens, pair.tokens[0]) orelse break :blk pair.name;
                     const quote_t = response.findSpotToken(tokens, pair.tokens[1]) orelse break :blk pair.name;
                     const base = base_t.name;
@@ -1560,12 +1559,9 @@ pub fn placeOrder(allocator: std.mem.Allocator, w: *Writer, config: Config, a: a
     }
 
     const grouping: types.OrderGrouping = if (bracket_count > 1) .normalTpsl else .na;
-    const builder = parseBuilderArgs(a.builder, a.builder_fee) catch |e| {
-        return switch (e) {
-            error.MissingArgument => failFmt(w, "--builder requires --builder-fee", .{}),
-            error.InvalidFlag => failFmt(w, "invalid --builder or --builder-fee value", .{}),
-            else => e,
-        };
+    const builder = parseBuilderArgs(a.builder, a.builder_fee) catch |e| switch (e) {
+        error.MissingArgument => return failFmt(w, "--builder requires --builder-fee", .{}),
+        error.InvalidFlag => return failFmt(w, "invalid --builder or --builder-fee value", .{}),
     };
     const batch = types.BatchOrder{
         .orders = bracket_orders[0..bracket_count],
@@ -2831,27 +2827,22 @@ fn isOutcomeAsset(asset: anytype) bool {
     return a >= 100_000_000;
 }
 
-/// Parse a builder fee from a percent or tenths-of-bps integer string.
-/// Accepts "0.001%", "0.001", or a bare integer (interpreted as tenths-of-bps).
-/// 1 tenths-of-bps = 0.0001%.
+/// Accept "0.001%" or "0.001" as percent, bare integer as raw tenths-of-bps.
+/// One tenth of a basis point = 0.0001%.
 fn parseBuilderFee(s: []const u8) ?u32 {
     if (s.len == 0) return null;
-    const trimmed = if (s[s.len - 1] == '%') s[0 .. s.len - 1] else s;
-
-    if (std.mem.indexOfScalar(u8, trimmed, '.') == null and s[s.len - 1] != '%') {
-        return std.fmt.parseInt(u32, trimmed, 10) catch null;
+    const has_pct = s[s.len - 1] == '%';
+    const body = if (has_pct) s[0 .. s.len - 1] else s;
+    if (!has_pct and std.mem.indexOfScalar(u8, body, '.') == null) {
+        return std.fmt.parseInt(u32, body, 10) catch null;
     }
-
-    const pct = std.fmt.parseFloat(f64, trimmed) catch return null;
+    const pct = std.fmt.parseFloat(f64, body) catch return null;
     if (pct < 0) return null;
     const tenths_bps = pct * 10_000.0;
     if (tenths_bps > @as(f64, std.math.maxInt(u32))) return null;
     return @intFromFloat(@round(tenths_bps));
 }
 
-/// Build a BuilderInfo from CLI --builder / --builder-fee args.
-/// Returns null when no builder is requested. Errors if address parse fails
-/// or fee is missing/invalid when an address is given.
 fn parseBuilderArgs(addr_opt: ?[]const u8, fee_opt: ?[]const u8) !?types.BuilderInfo {
     const addr_str = addr_opt orelse return null;
     const fee_str = fee_opt orelse return error.MissingArgument;
@@ -4209,12 +4200,9 @@ pub fn batchCmd(allocator: std.mem.Allocator, w: *Writer, config: Config, a: arg
         return fail(w, "no valid orders to submit");
     }
 
-    const builder = parseBuilderArgs(ba.builder, ba.builder_fee) catch |e| {
-        return switch (e) {
-            error.MissingArgument => failFmt(w, "--builder requires --builder-fee", .{}),
-            error.InvalidFlag => failFmt(w, "invalid --builder or --builder-fee value", .{}),
-            else => e,
-        };
+    const builder = parseBuilderArgs(ba.builder, ba.builder_fee) catch |e| switch (e) {
+        error.MissingArgument => return failFmt(w, "--builder requires --builder-fee", .{}),
+        error.InvalidFlag => return failFmt(w, "invalid --builder or --builder-fee value", .{}),
     };
     const batch_order = types.BatchOrder{
         .orders = batch_items[0..order_count],

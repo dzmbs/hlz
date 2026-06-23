@@ -409,9 +409,7 @@ pub const Client = struct {
         return self.exchangeRequestDyn(body);
     }
 
-    /// Agent-signed self-transfer across DEXes/spot/subaccounts.
-    /// Destination must equal the source address — exchange-side check.
-    /// Signed via L1-action path (msgpack), not EIP-712.
+    /// Agent-signed self-transfer. Signs via the L1 RMP path, not EIP-712.
     pub fn agentSendAsset(
         self: *Client,
         s: Signer,

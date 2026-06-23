@@ -734,17 +734,14 @@ const WsWorker = struct {
         runInner(shared, allocator, chain, user_addr) catch {};
     }
 
-    /// Reconnect backoff matches upstream hypersdk (5ada01f): 500ms × 2^attempts
-    /// capped at 5s, with attempts shifted at most 13 times so 1<<attempts cannot
-    /// overflow the u6 shift on u64. Reset to 0 on a successful connect.
     const INITIAL_RECONNECT_NS: u64 = 500_000_000;
     const MAX_RECONNECT_NS: u64 = 5_000_000_000;
+    // Cap shift at 13 — beyond that `1 << shift` overflows once the multiply is folded in.
     const MAX_RECONNECT_SHIFT: u6 = 13;
 
     fn backoffNs(attempts: u32) u64 {
         const shift: u6 = @intCast(@min(attempts, @as(u32, MAX_RECONNECT_SHIFT)));
-        const ns = INITIAL_RECONNECT_NS *% (@as(u64, 1) << shift);
-        return @min(ns, MAX_RECONNECT_NS);
+        return @min(INITIAL_RECONNECT_NS *% (@as(u64, 1) << shift), MAX_RECONNECT_NS);
     }
 
     fn runInner(shared: *Shared, allocator: std.mem.Allocator, chain: signing.Chain, user_addr: ?[]const u8) !void {
@@ -2937,11 +2934,9 @@ fn buildOutcomeDisplay(buf: *[48]u8, o: response.OutcomeInfo, side: response.Out
     if (response.parseRecurringEvent(o.description)) |ev| {
         var px_buf: [24]u8 = undefined;
         const px = ev.target_price.normalize().toString(&px_buf) catch "?";
-        // "BTC>74212 1d (Yes)"
         const r = std.fmt.bufPrint(buf, "{s}>{s} {s} ({s})", .{ ev.underlying, px, ev.period, side.name }) catch return 0;
         return r.len;
     }
-    // Fallback: "Question Name (Side)"
     const r = std.fmt.bufPrint(buf, "{s} ({s})", .{ o.name[0..@min(o.name.len, 30)], side.name }) catch return 0;
     return r.len;
 }

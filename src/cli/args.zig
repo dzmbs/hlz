@@ -157,8 +157,6 @@ pub const SendArgs = struct {
     from: []const u8 = "perp",
     to: []const u8 = "perp",
     subaccount: ?[]const u8 = null,
-    /// Sign as an agent (API wallet) via agentSendAsset instead of sendAsset.
-    /// Restricted to self-transfers across DEXes/spot/sub-accounts.
     agent: bool = false,
 };
 
