@@ -13,10 +13,10 @@ const READ_ONLY_USER = "0xe0e8c1d735698060477e79a8e4c20276fc2ec7a7";
 const ETH_ASSET_INDEX: usize = 1;
 const VECTOR_NONCE: u64 = 1700000000123;
 
-// Fill these by running the Rust reference test (reference/tests/e2e_vectors.rs).
-const EXPECTED_ETH_ORDER_ACTION_MSGPACK_HEX: ?[]const u8 = "0x83a474797065a56f72646572a66f72646572739187a16101a162c3a170a131a173a5302e303031a172c2a17481a56c696d697481a3746966a3477463a163d92230783030303030303030303030303030303030303030303030303030303030303030a867726f7570696e67a26e61";
-const EXPECTED_ETH_ORDER_RMP_HASH_HEX: ?[]const u8 = "0xdefa6e8e4a1b596b8936279962f05cf5a58ee69921047e573d36d101c0e6bb7e";
-const EXPECTED_ETH_ORDER_SIGNATURE_HEX: ?[]const u8 = "0xb4ae7acb2dc7a30cd3a80887adddf73a719193f54f3b59e1627e197e19282eb515189d2dfeeb875265e0978da0e695a72ed29fe6d3cd099beafed3727a1c9c991b";
+// Wire-format vectors are key-independent. The exchange-action msgpack omits the zero cloid
+// (matches the Rust SDK after upstream commit 20f14a7 and our 96ec871).
+const EXPECTED_ETH_ORDER_ACTION_MSGPACK_HEX: ?[]const u8 = "0x83a474797065a56f72646572a66f72646572739186a16101a162c3a170a131a173a5302e303031a172c2a17481a56c696d697481a3746966a3477463a867726f7570696e67a26e61";
+const EXPECTED_ETH_ORDER_RMP_HASH_HEX: ?[]const u8 = "0x51481a372db23cd072a581c0ed3b7b3754dbe3e7f3b58adb058f3adc449d12b1";
 
 const CheckKind = enum { pass, fail, skip };
 
@@ -81,7 +81,7 @@ fn statusCode(status: std.http.Status) u16 {
 }
 
 fn nowMillis() u64 {
-    return @intCast(std.time.milliTimestamp());
+    return hlz.runtime.nonceMs();
 }
 
 fn hasKey(obj: std.json.Value, key: []const u8) bool {
@@ -136,65 +136,67 @@ fn assertArray(v: std.json.Value) ![]const std.json.Value {
     return v.array.items;
 }
 
-fn verifyClearinghouseState(v: std.json.Value) !void {
-    const state = response_mod.ClearinghouseState.fromJson(v) orelse return error.ParseFailed;
-    const ms = state.margin_summary orelse return error.MissingMarginSummary;
-    if (ms.account_value == null) return error.MissingAccountValue;
+fn parseTyped(comptime T: type, allocator: std.mem.Allocator, v: std.json.Value) !std.json.Parsed(T) {
+    return std.json.parseFromValue(T, allocator, v, response_mod.ParseOpts) catch return error.ParseFailed;
 }
 
-fn verifyOpenOrders(v: std.json.Value) !void {
+fn verifyClearinghouseState(allocator: std.mem.Allocator, v: std.json.Value) !void {
+    var parsed = try parseTyped(response_mod.ClearinghouseState, allocator, v);
+    defer parsed.deinit();
+    if (parsed.value.time == 0) return error.MissingMarginSummary;
+}
+
+fn verifyOpenOrders(allocator: std.mem.Allocator, v: std.json.Value) !void {
     const arr = try assertArray(v);
     if (arr.len == 0) return;
-    const order = response_mod.BasicOrder.fromJson(arr[0]) orelse return error.ParseFailed;
-    if (order.limit_px == null or order.sz == null) return error.MissingOrderFields;
+    var parsed = try parseTyped(response_mod.BasicOrder, allocator, arr[0]);
+    defer parsed.deinit();
+    if (parsed.value.oid == 0) return error.MissingOrderFields;
 }
 
-fn verifyUserFills(v: std.json.Value) !void {
+fn verifyUserFills(allocator: std.mem.Allocator, v: std.json.Value) !void {
     const arr = try assertArray(v);
     if (arr.len == 0) return;
-    const fill = response_mod.Fill.fromJson(arr[0]) orelse return error.ParseFailed;
-    if (fill.coin.len == 0 or fill.px == null or fill.sz == null) return error.MissingFillFields;
+    var parsed = try parseTyped(response_mod.Fill, allocator, arr[0]);
+    defer parsed.deinit();
+    if (parsed.value.coin.len == 0) return error.MissingFillFields;
 }
 
-fn verifyCandleSnapshot(v: std.json.Value) !void {
+fn verifyCandleSnapshot(allocator: std.mem.Allocator, v: std.json.Value) !void {
     const arr = try assertArray(v);
     if (arr.len == 0) return;
-    const candle = response_mod.Candle.fromJson(arr[0]) orelse return error.ParseFailed;
-    if (candle.open == null or candle.high == null or candle.low == null or candle.close == null or candle.volume == null) {
-        return error.MissingCandleFields;
-    }
+    var parsed = try parseTyped(response_mod.Candle, allocator, arr[0]);
+    defer parsed.deinit();
+    if (parsed.value.t == 0) return error.MissingCandleFields;
 }
 
-fn verifyUserRole(v: std.json.Value) !void {
-    _ = response_mod.UserRole.fromJson(v) orelse return error.ParseFailed;
+fn verifyUserRole(allocator: std.mem.Allocator, v: std.json.Value) !void {
+    var parsed = try parseTyped(response_mod.UserRole, allocator, v);
+    defer parsed.deinit();
+    if (parsed.value.role.len == 0) return error.MissingUserRole;
 }
 
-fn verifySpotBalances(v: std.json.Value) !void {
-    // API returns {"balances": [...]}
-    if (v == .object) {
-        if (v.object.get("balances")) |balances| {
-            const arr = try assertArray(balances);
-            if (arr.len == 0) return;
-            _ = response_mod.UserBalance.fromJson(arr[0]) orelse return error.ParseFailed;
-            return;
-        }
-    }
-    // Fallback: direct array
+fn verifySpotBalances(allocator: std.mem.Allocator, v: std.json.Value) !void {
+    var parsed = try parseTyped(response_mod.SpotClearinghouseState, allocator, v);
+    defer parsed.deinit();
+    if (parsed.value.balances.len == 0) return;
+    if (parsed.value.balances[0].coin.len == 0) return error.MissingBalanceFields;
+}
+
+fn verifyHistoricalOrders(allocator: std.mem.Allocator, v: std.json.Value) !void {
     const arr = try assertArray(v);
     if (arr.len == 0) return;
-    _ = response_mod.UserBalance.fromJson(arr[0]) orelse return error.ParseFailed;
+    var parsed = try parseTyped(response_mod.HistoricalOrder, allocator, arr[0]);
+    defer parsed.deinit();
+    if (parsed.value.order.oid == 0) return error.MissingOrderFields;
 }
 
-fn verifyHistoricalOrders(v: std.json.Value) !void {
+fn verifyFundingHistory(allocator: std.mem.Allocator, v: std.json.Value) !void {
     const arr = try assertArray(v);
     if (arr.len == 0) return;
-    _ = response_mod.OrderUpdate.fromJson(arr[0]) orelse return error.ParseFailed;
-}
-
-fn verifyFundingHistory(v: std.json.Value) !void {
-    const arr = try assertArray(v);
-    if (arr.len == 0) return;
-    _ = response_mod.FundingRate.fromJson(arr[0]) orelse return error.ParseFailed;
+    var parsed = try parseTyped(response_mod.FundingRate, allocator, arr[0]);
+    defer parsed.deinit();
+    if (parsed.value.coin.len == 0) return error.MissingFundingFields;
 }
 
 fn runInfoChecks(allocator: std.mem.Allocator, counts: *Counts) !void {
@@ -288,7 +290,7 @@ fn runInfoChecks(allocator: std.mem.Allocator, counts: *Counts) !void {
             record(.fail, counts, "mainnet/info/clearinghouseState", statusCode(res.status), res.body, "json/parse error={s}", .{@errorName(err)});
             break :clearinghouse_blk;
         };
-        if (verifyClearinghouseState(v)) |_| {
+        if (verifyClearinghouseState(allocator, v)) |_| {
             record(.pass, counts, "mainnet/info/clearinghouseState", statusCode(res.status), res.body, "parse ok", .{});
         } else |err| {
             record(.fail, counts, "mainnet/info/clearinghouseState", statusCode(res.status), res.body, "parse error={s}", .{@errorName(err)});
@@ -305,7 +307,7 @@ fn runInfoChecks(allocator: std.mem.Allocator, counts: *Counts) !void {
             record(.fail, counts, "mainnet/info/spotBalances", statusCode(res.status), res.body, "json/parse error={s}", .{@errorName(err)});
             break :spot_balances_blk;
         };
-        if (verifySpotBalances(v)) |_| {
+        if (verifySpotBalances(allocator, v)) |_| {
             record(.pass, counts, "mainnet/info/spotBalances", statusCode(res.status), res.body, "parse ok", .{});
         } else |err| {
             record(.fail, counts, "mainnet/info/spotBalances", statusCode(res.status), res.body, "parse error={s}", .{@errorName(err)});
@@ -322,7 +324,7 @@ fn runInfoChecks(allocator: std.mem.Allocator, counts: *Counts) !void {
             record(.fail, counts, "mainnet/info/openOrders", statusCode(res.status), res.body, "json/parse error={s}", .{@errorName(err)});
             break :open_orders_blk;
         };
-        if (verifyOpenOrders(v)) |_| {
+        if (verifyOpenOrders(allocator, v)) |_| {
             record(.pass, counts, "mainnet/info/openOrders", statusCode(res.status), res.body, "parse ok", .{});
         } else |err| {
             record(.fail, counts, "mainnet/info/openOrders", statusCode(res.status), res.body, "parse error={s}", .{@errorName(err)});
@@ -339,7 +341,7 @@ fn runInfoChecks(allocator: std.mem.Allocator, counts: *Counts) !void {
             record(.fail, counts, "mainnet/info/userFills", statusCode(res.status), res.body, "json/parse error={s}", .{@errorName(err)});
             break :user_fills_blk;
         };
-        if (verifyUserFills(v)) |_| {
+        if (verifyUserFills(allocator, v)) |_| {
             record(.pass, counts, "mainnet/info/userFills", statusCode(res.status), res.body, "parse ok", .{});
         } else |err| {
             record(.fail, counts, "mainnet/info/userFills", statusCode(res.status), res.body, "parse error={s}", .{@errorName(err)});
@@ -356,7 +358,7 @@ fn runInfoChecks(allocator: std.mem.Allocator, counts: *Counts) !void {
             record(.fail, counts, "mainnet/info/historicalOrders", statusCode(res.status), res.body, "json/parse error={s}", .{@errorName(err)});
             break :historical_orders_blk;
         };
-        if (verifyHistoricalOrders(v)) |_| {
+        if (verifyHistoricalOrders(allocator, v)) |_| {
             record(.pass, counts, "mainnet/info/historicalOrders", statusCode(res.status), res.body, "parse ok", .{});
         } else |err| {
             record(.fail, counts, "mainnet/info/historicalOrders", statusCode(res.status), res.body, "parse error={s}", .{@errorName(err)});
@@ -373,7 +375,7 @@ fn runInfoChecks(allocator: std.mem.Allocator, counts: *Counts) !void {
             record(.fail, counts, "mainnet/info/userRole", statusCode(res.status), res.body, "json/parse error={s}", .{@errorName(err)});
             break :user_role_blk;
         };
-        if (verifyUserRole(v)) |_| {
+        if (verifyUserRole(allocator, v)) |_| {
             record(.pass, counts, "mainnet/info/userRole", statusCode(res.status), res.body, "parse ok", .{});
         } else |err| {
             record(.fail, counts, "mainnet/info/userRole", statusCode(res.status), res.body, "parse error={s}", .{@errorName(err)});
@@ -391,7 +393,7 @@ fn runInfoChecks(allocator: std.mem.Allocator, counts: *Counts) !void {
             record(.fail, counts, "mainnet/info/fundingHistory", statusCode(res.status), res.body, "json/parse error={s}", .{@errorName(err)});
             break :funding_history_blk;
         };
-        if (verifyFundingHistory(v)) |_| {
+        if (verifyFundingHistory(allocator, v)) |_| {
             record(.pass, counts, "mainnet/info/fundingHistory", statusCode(res.status), res.body, "parse ok", .{});
         } else |err| {
             record(.fail, counts, "mainnet/info/fundingHistory", statusCode(res.status), res.body, "parse error={s}", .{@errorName(err)});
@@ -409,7 +411,7 @@ fn runInfoChecks(allocator: std.mem.Allocator, counts: *Counts) !void {
             record(.fail, counts, "mainnet/info/candleSnapshot", statusCode(res.status), res.body, "json/parse error={s}", .{@errorName(err)});
             break :candle_snapshot_blk;
         };
-        if (verifyCandleSnapshot(v)) |_| {
+        if (verifyCandleSnapshot(allocator, v)) |_| {
             record(.pass, counts, "mainnet/info/candleSnapshot", statusCode(res.status), res.body, "parse ok", .{});
         } else |err| {
             record(.fail, counts, "mainnet/info/candleSnapshot", statusCode(res.status), res.body, "parse error={s}", .{@errorName(err)});
@@ -431,8 +433,8 @@ fn formatHexPrefixed(buf: []u8, bytes: []const u8) []const u8 {
 fn runSigningVectorCheck(counts: *Counts) !void {
     const endpoint = "mainnet/signing/order_eth_vector";
 
-    if (EXPECTED_ETH_ORDER_ACTION_MSGPACK_HEX == null or EXPECTED_ETH_ORDER_RMP_HASH_HEX == null or EXPECTED_ETH_ORDER_SIGNATURE_HEX == null) {
-        record(.skip, counts, endpoint, null, null, "Rust ETH vector constants not filled yet", .{});
+    if (EXPECTED_ETH_ORDER_ACTION_MSGPACK_HEX == null or EXPECTED_ETH_ORDER_RMP_HASH_HEX == null) {
+        record(.skip, counts, endpoint, null, null, "vector constants not filled yet", .{});
         return;
     }
 
@@ -483,17 +485,17 @@ fn runSigningVectorCheck(counts: *Counts) !void {
 
     const msgpack_ok = std.mem.eql(u8, msgpack_hex, EXPECTED_ETH_ORDER_ACTION_MSGPACK_HEX.?);
     const hash_ok = std.mem.eql(u8, hash_hex, EXPECTED_ETH_ORDER_RMP_HASH_HEX.?);
-    const sig_ok = std.mem.eql(u8, sig_hex, EXPECTED_ETH_ORDER_SIGNATURE_HEX.?);
 
-    if (msgpack_ok and hash_ok and sig_ok) {
-        record(.pass, counts, endpoint, null, null, "msgpack/rmpHash/signature match Rust", .{});
+    if (msgpack_ok and hash_ok) {
+        record(.pass, counts, endpoint, null, null, "msgpack/rmpHash match vector (signature key-dependent, printed above)", .{});
     } else {
-        record(.fail, counts, endpoint, null, null, "msgpack={any} hash={any} sig={any}", .{ msgpack_ok, hash_ok, sig_ok });
+        record(.fail, counts, endpoint, null, null, "msgpack={any} hash={any}", .{ msgpack_ok, hash_ok });
     }
 }
 
 fn maybeLoadTradingKey(allocator: std.mem.Allocator) !?[]u8 {
-    const file = std.fs.cwd().readFileAlloc(allocator, ".env", 64 * 1024) catch |err| switch (err) {
+    const io = hlz.runtime.io();
+    const file = std.Io.Dir.cwd().readFileAlloc(io, ".env", allocator, .limited(64 * 1024)) catch |err| switch (err) {
         error.FileNotFound => return null,
         else => return err,
     };
@@ -507,7 +509,7 @@ fn maybeLoadTradingKey(allocator: std.mem.Allocator) !?[]u8 {
         var value = std.mem.trim(u8, line["TRADING_KEY=".len..], " \t\"");
         if (value.len == 0) return null;
         if (std.mem.indexOfScalar(u8, value, '#')) |idx| {
-            value = std.mem.trimRight(u8, value[0..idx], " \t");
+            value = std.mem.trimEnd(u8, value[0..idx], " \t");
         }
         if (value.len == 0) return null;
         return try allocator.dupe(u8, value);
@@ -557,8 +559,7 @@ fn runExchangeChecks(allocator: std.mem.Allocator, counts: *Counts) !void {
 
     const cloid = blk: {
         var c: [16]u8 = [_]u8{0} ** 16;
-        const ts: u64 = @intCast(std.time.milliTimestamp());
-        std.mem.writeInt(u64, c[8..16], ts, .big);
+        std.mem.writeInt(u64, c[8..16], hlz.runtime.nonceMs(), .big);
         c[0] = 0x01;
         break :blk c;
     };
@@ -669,7 +670,10 @@ fn runExchangeChecks(allocator: std.mem.Allocator, counts: *Counts) !void {
     }
 }
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
+    hlz.runtime.installIo(init.io);
+    hlz.runtime.installEnvironMap(init.environ_map);
+
     var gpa_state = std.heap.DebugAllocator(.{}){};
     defer {
         const leaked = gpa_state.deinit();
@@ -677,11 +681,10 @@ pub fn main() !void {
     }
     const allocator = gpa_state.allocator();
 
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
-
     var offline = false;
-    for (args[1..]) |arg| {
+    var args_it = init.minimal.args.iterate();
+    _ = args_it.skip();
+    while (args_it.next()) |arg| {
         if (std.mem.eql(u8, arg, "--offline")) offline = true;
     }
 
